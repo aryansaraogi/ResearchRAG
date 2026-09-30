@@ -2,11 +2,11 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis, type TooltipContentProps } from "recharts";
-import { ChevronDown, Loader2, Play, Sparkles } from "lucide-react";
+import { ChevronDown, FlaskConical, Loader2, Play, Sparkles } from "lucide-react";
 import { api, type DatasetStatus, type EvalDetailRow, type EvalItem, type EvalRun, type Health } from "@/lib/api";
 import { AnswerMarkdown } from "@/components/AnswerMarkdown";
 import { useFacets } from "@/components/FilterPanel";
-import { Badge, Button, Card, ErrorNote, PageHeader, inputClass } from "@/components/ui";
+import { Badge, Button, Card, EmptyState, ErrorNote, PageHeader, Skeleton, StatTile, inputSmClass } from "@/components/ui";
 
 /* Color follows the config, never its rank: each config owns a fixed series slot. */
 const CONFIGS: Record<string, { label: string; hint: string; color: string }> = {
@@ -115,7 +115,7 @@ function DatasetCard({
             max={200}
             value={n}
             onChange={(e) => setN(Math.min(200, Math.max(5, Number(e.target.value) || 5)))}
-            className={inputClass + " w-20! py-1!"}
+            className={inputSmClass + " w-20"}
             aria-label="Number of questions"
           />
         </label>
@@ -141,7 +141,7 @@ function DatasetCard({
         </p>
       )}
       {status && status.state !== "idle" && (
-        <p className={`mt-2 text-xs ${status.state === "failed" ? "text-critical" : "text-ink-3"}`}>
+        <p className={`mt-2 text-xs ${status.state === "failed" ? "text-critical-ink" : "text-ink-3"}`}>
           {status.state === "done" ? `Last generation: ${status.message}` : status.message}
         </p>
       )}
@@ -151,7 +151,7 @@ function DatasetCard({
 
       {!!items?.length && (
         <div className="mt-3 border-t border-line pt-3">
-          <button onClick={() => setOpen(!open)} className="flex items-center gap-1 text-xs text-accent hover:underline">
+          <button onClick={() => setOpen(!open)} className="flex items-center gap-1 text-xs text-accent-ink hover:underline">
             <ChevronDown size={13} className={`transition ${open ? "" : "-rotate-90"}`} />
             {open ? "Hide questions" : "Browse questions"}
           </button>
@@ -269,7 +269,7 @@ function NewRunCard({
             value={maxGen}
             placeholder="all"
             onChange={(e) => setMaxGen(e.target.value.replace(/\D/g, ""))}
-            className={inputClass + " w-20! py-1!"}
+            className={inputSmClass + " w-20"}
             aria-label="Questions to judge"
             disabled={!gen.length}
           />
@@ -333,15 +333,18 @@ function RetrievalChart({ run, configs }: { run: EvalRun; configs: string[] }) {
     ...Object.fromEntries(configs.map((c) => [c, run.results[c]?.[m] ?? 0])),
   }));
   return (
-    <div className="h-64">
+    // On narrow screens the chart keeps a minimum width and scrolls, so no metric label is dropped
+    <div className="-mx-1 overflow-x-auto px-1">
+    <div className="h-64 min-w-80">
       <ResponsiveContainer width="100%" height="100%">
         <BarChart data={data} barGap={2} barCategoryGap="18%" margin={{ top: 8, right: 4, left: -20, bottom: 0 }}>
           <CartesianGrid vertical={false} stroke="var(--grid)" />
           <XAxis
             dataKey="metric"
+            interval={0}
             tickLine={false}
             axisLine={{ stroke: "var(--border)" }}
-            tick={{ fill: "var(--text-2)", fontSize: 12 }}
+            tick={{ fill: "var(--text-2)", fontSize: 11 }}
           />
           <YAxis
             domain={[0, 1]}
@@ -357,6 +360,7 @@ function RetrievalChart({ run, configs }: { run: EvalRun; configs: string[] }) {
           ))}
         </BarChart>
       </ResponsiveContainer>
+    </div>
     </div>
   );
 }
@@ -420,16 +424,6 @@ function MetricTable({
   );
 }
 
-function Stat({ label, value, sub }: { label: string; value: string; sub?: React.ReactNode }) {
-  return (
-    <div className="rounded-lg border border-line bg-surface px-4 py-3">
-      <div className="text-xs text-ink-3">{label}</div>
-      <div className="mt-1 text-2xl font-semibold">{value}</div>
-      {sub && <div className="mt-0.5 text-xs text-ink-2">{sub}</div>}
-    </div>
-  );
-}
-
 function Summary({ run, configs, genConfigs }: { run: EvalRun; configs: string[]; genConfigs: string[] }) {
   const r = run.results;
   const bestCfg = configs.reduce((a, b) => ((r[b]?.mrr ?? 0) > (r[a]?.mrr ?? 0) ? b : a), configs[0]);
@@ -438,29 +432,29 @@ function Summary({ run, configs, genConfigs }: { run: EvalRun; configs: string[]
   const g = genConfigs[0];
   return (
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-      <Stat label="Questions" value={String(run.dataset_size)} sub={`${configs.length} retrieval configs`} />
-      <Stat label="Best MRR" value={fmt(r[bestCfg]?.mrr)} sub={cfgLabel(bestCfg)} />
+      <StatTile label="Questions" value={String(run.dataset_size)} sub={`${configs.length} retrieval configs`} />
+      <StatTile label="Best MRR" value={fmt(r[bestCfg]?.mrr)} sub={cfgLabel(bestCfg)} />
       {lift != null ? (
-        <Stat
+        <StatTile
           label="Reranker lift on MRR"
           value={`${lift >= 0 ? "+" : "−"}${Math.abs(lift).toFixed(3)}`}
           sub={
-            <span className={lift >= 0 ? "text-good" : "text-critical"}>
+            <span className={lift >= 0 ? "text-good-ink" : "text-critical-ink"}>
               {lift >= 0 ? "▲ better" : "▼ worse"} than Hybrid (RRF)
             </span>
           }
         />
       ) : (
-        <Stat label="Hit@5" value={fmt(r[bestCfg]?.["hit@5"])} sub={cfgLabel(bestCfg)} />
+        <StatTile label="Hit@5" value={fmt(r[bestCfg]?.["hit@5"])} sub={cfgLabel(bestCfg)} />
       )}
       {g ? (
-        <Stat
+        <StatTile
           label="Faithfulness"
           value={fmt(r[g]?.faithfulness, 2)}
           sub={`${cfgLabel(g)} · ${r[g]?.n_generation ?? 0} judged`}
         />
       ) : (
-        <Stat label="Mean latency" value={`${Math.round(r[bestCfg]?.latency_ms ?? 0)} ms`} sub={cfgLabel(bestCfg)} />
+        <StatTile label="Mean latency" value={`${Math.round(r[bestCfg]?.latency_ms ?? 0)} ms`} sub={cfgLabel(bestCfg)} />
       )}
     </div>
   );
@@ -492,11 +486,20 @@ function QuestionRow({
             <div className="min-w-0">
               <div className="leading-snug">{row.question}</div>
               <div className="mt-0.5 truncate text-xs text-ink-3">{paperTitle}</div>
+              {/* Phones: ranks sit under the question instead of in columns */}
+              <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 sm:hidden">
+                {configs.map((c) => (
+                  <span key={c} className="flex items-center gap-1 text-xs text-ink-3">
+                    <span className="h-2 w-2 rounded-sm" style={{ background: cfgColor(c) }} />
+                    {cfgLabel(c)} <RankCell rank={row.configs[c]?.gold_rank} />
+                  </span>
+                ))}
+              </div>
             </div>
           </div>
         </td>
         {configs.map((c) => (
-          <td key={c} className="px-2 py-2 text-center">
+          <td key={c} className="hidden px-2 py-2 text-center sm:table-cell">
             <RankCell rank={row.configs[c]?.gold_rank} />
           </td>
         ))}
@@ -576,7 +579,7 @@ function QuestionTable({ run, configs }: { run: EvalRun; configs: string[] }) {
             <tr className="border-b border-line text-xs text-ink-3">
               <th className="py-2 pr-3 text-left font-medium">Question</th>
               {configs.map((c) => (
-                <th key={c} className="w-24 whitespace-nowrap px-2 py-2 text-center font-medium">
+                <th key={c} className="hidden w-24 whitespace-nowrap px-2 py-2 text-center font-medium sm:table-cell">
                   {cfgLabel(c)}
                 </th>
               ))}
@@ -771,14 +774,15 @@ export default function EvalPage() {
   const shown = selected && selected.id === shownId ? { ...selected, ...runs?.find((r) => r.id === shownId), details: selected.details } : null;
 
   return (
-    <div className="mx-auto w-full max-w-7xl space-y-5 px-4 py-6">
+    <div className="mx-auto w-full max-w-7xl space-y-6 px-4 py-8">
       <PageHeader
+        icon={FlaskConical}
         title="Evaluation"
         subtitle="Compare retrieval strategies and grade cited answers on questions generated from your own papers."
       />
       <ErrorNote message={error} />
       {health && !llmReady && (
-        <div className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-ink-2">
+        <div className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-ink-2">
           No Gemini key configured: you can run retrieval metrics on an existing question set, but generating questions
           and judging answers need <code className="font-mono text-xs">GEMINI_API_KEY</code>.
         </div>
@@ -798,7 +802,7 @@ export default function EvalPage() {
               <li key={r.id} className="shrink-0">
                 <button
                   onClick={() => setSelectedId(r.id)}
-                  className={`w-full rounded-md border px-3 py-2 text-left transition ${
+                  className={`w-full rounded-lg border px-3 py-2 text-left shadow-card transition ${
                     r.id === shownId ? "border-accent bg-accent-soft" : "border-line bg-surface hover:border-ink-3"
                   }`}
                 >
@@ -818,13 +822,20 @@ export default function EvalPage() {
         <div className="min-w-0">
           {shown ? (
             <RunResults key={shown.id} run={shown} />
-          ) : runs?.length ? (
-            <Card className="flex items-center gap-2 p-6 text-sm text-ink-3">
-              <Loader2 size={14} className="animate-spin" /> Loading run…
-            </Card>
+          ) : runs === null || runs.length ? (
+            <div className="space-y-4" aria-label="Loading run">
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                {[0, 1, 2, 3].map((i) => (
+                  <Skeleton key={i} className="h-21.5 rounded-xl" />
+                ))}
+              </div>
+              <Skeleton className="h-80 rounded-xl" />
+            </div>
           ) : (
-            <Card className="p-8 text-center text-sm text-ink-3">
-              Generate a question set, then start a run to compare Dense, BM25, Hybrid and Hybrid + rerank.
+            <Card>
+              <EmptyState icon={FlaskConical} title="No evaluation runs yet">
+                Generate a question set, then start a run to compare Dense, BM25, Hybrid and Hybrid + rerank.
+              </EmptyState>
             </Card>
           )}
         </div>

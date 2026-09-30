@@ -1,11 +1,28 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronDown, ExternalLink, FileUp, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
-import { api, pdfUrl, type ArxivResult, type Paper } from "@/lib/api";
-import { Badge, Button, Card, ErrorNote, PageHeader, inputClass } from "@/components/ui";
+import { BookOpen, ChevronDown, FileText, FileUp, Library, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
+import { api, type ArxivResult, type Paper } from "@/lib/api";
+import { usePdfViewer } from "@/components/PdfViewer";
+import { useToast } from "@/components/Toast";
+import {
+  Badge,
+  Button,
+  Card,
+  ConfirmButton,
+  EmptyState,
+  ErrorNote,
+  IconButton,
+  PageHeader,
+  Skeleton,
+  StatTile,
+  inputClass,
+  inputSmClass,
+} from "@/components/ui";
 
 const ARXIV_ID = /^(arxiv:)?\d{4}\.\d{4,5}(v\d+)?$|arxiv\.org\/(abs|pdf)\//i;
+const CLASSICS = ["1706.03762", "1810.04805", "2004.04906", "2005.11401"];
+const FILTER_THRESHOLD = 5;
 
 function authorsShort(a: string[]) {
   if (!a.length) return "Unknown authors";
@@ -23,7 +40,7 @@ function StatusBadge({ status }: { status: Paper["status"] }) {
   return <Badge tone={tone}>{label}</Badge>;
 }
 
-function ArxivImport({ onImported }: { onImported: () => void }) {
+function ArxivImport({ onImported }: { onImported: (n: number) => void }) {
   const [q, setQ] = useState("");
   const [results, setResults] = useState<ArxivResult[] | null>(null);
   const [busy, setBusy] = useState(false);
@@ -39,10 +56,10 @@ function ArxivImport({ onImported }: { onImported: () => void }) {
     setBusy(true);
     try {
       if (isIdList) {
-        await api.importArxiv(tokens);
+        const papers = await api.importArxiv(tokens);
         setQ("");
         setResults(null);
-        onImported();
+        onImported(papers.length);
       } else {
         setResults(await api.searchArxiv(q));
       }
@@ -57,8 +74,7 @@ function ArxivImport({ onImported }: { onImported: () => void }) {
     setImporting(id);
     setError(null);
     try {
-      await api.importArxiv([id]);
-      onImported();
+      onImported((await api.importArxiv([id])).length);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -71,9 +87,15 @@ function ArxivImport({ onImported }: { onImported: () => void }) {
       <h2 className="text-sm font-semibold">Import from arXiv</h2>
       <p className="mt-0.5 text-xs text-ink-3">Paste arXiv IDs (e.g. 1706.03762 2005.11401) or search by topic.</p>
       <form onSubmit={submit} className="mt-3 flex gap-2">
-        <input className={inputClass} value={q} onChange={(e) => setQ(e.target.value)} placeholder="IDs or search query" />
+        <input
+          className={inputClass}
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="IDs or search query"
+          aria-label="arXiv IDs or search query"
+        />
         <Button type="submit" loading={busy} disabled={!q.trim()}>
-          {isIdList ? <Plus size={14} /> : <Search size={14} />}
+          {!busy && (isIdList ? <Plus size={14} /> : <Search size={14} />)}
           {isIdList ? `Import ${tokens.length}` : "Search"}
         </Button>
       </form>
@@ -102,7 +124,7 @@ function ArxivImport({ onImported }: { onImported: () => void }) {
   );
 }
 
-function Upload({ onUploaded }: { onUploaded: () => void }) {
+function Upload({ onUploaded }: { onUploaded: (n: number) => void }) {
   const input = useRef<HTMLInputElement>(null);
   const [drag, setDrag] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -114,8 +136,7 @@ function Upload({ onUploaded }: { onUploaded: () => void }) {
     setError(null);
     setBusy(true);
     try {
-      await api.upload(pdfs);
-      onUploaded();
+      onUploaded((await api.upload(pdfs)).length);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -137,8 +158,8 @@ function Upload({ onUploaded }: { onUploaded: () => void }) {
           setDrag(false);
           send(Array.from(e.dataTransfer.files));
         }}
-        className={`mt-3 flex w-full flex-col items-center justify-center gap-1 rounded-md border border-dashed px-4 py-6 text-sm transition ${
-          drag ? "border-accent bg-accent-soft" : "border-line text-ink-2 hover:border-ink-3"
+        className={`mt-3 flex w-full flex-col items-center justify-center gap-1 rounded-lg border border-dashed px-4 py-6 text-sm transition ${
+          drag ? "border-accent bg-accent-soft" : "border-line text-ink-2 hover:border-ink-3 hover:bg-surface-2/50"
         }`}
       >
         <FileUp size={20} className="text-ink-3" />
@@ -163,23 +184,34 @@ function Upload({ onUploaded }: { onUploaded: () => void }) {
 }
 
 function PaperRow({ paper, onChange }: { paper: Paper; onChange: () => void }) {
+  const openPdf = usePdfViewer();
+  const toast = useToast();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  const act = async (fn: () => Promise<unknown>) => {
+  const act = async (fn: () => Promise<unknown>, done: string) => {
     setBusy(true);
     try {
       await fn();
+      toast(done, "good");
       onChange();
+    } catch (err) {
+      toast((err as Error).message, "critical");
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <li className="px-4 py-3">
-      <div className="flex items-start gap-3">
-        <button onClick={() => setOpen(!open)} className="mt-0.5 text-ink-3 hover:text-ink" aria-label="Toggle details">
+    <li className="animate-in px-4 py-3.5 transition-colors hover:bg-surface-2/40">
+      {/* Phones: actions wrap under the details so titles keep the full width */}
+      <div className="grid grid-cols-[auto_1fr] items-start gap-x-3 sm:grid-cols-[auto_1fr_auto]">
+        <button
+          onClick={() => setOpen(!open)}
+          className="mt-0.5 rounded text-ink-3 hover:text-ink"
+          aria-label={open ? "Hide details" : "Show details"}
+          aria-expanded={open}
+        >
           <ChevronDown size={16} className={`transition ${open ? "" : "-rotate-90"}`} />
         </button>
         <div className="min-w-0 flex-1">
@@ -187,40 +219,43 @@ function PaperRow({ paper, onChange }: { paper: Paper; onChange: () => void }) {
             <span className="font-medium leading-snug">{paper.title}</span>
             <StatusBadge status={paper.status} />
           </div>
-          <div className="mt-0.5 text-xs text-ink-3">
-            {authorsShort(paper.authors)}
-            {paper.year ? ` · ${paper.year}` : ""}
-            {paper.status === "ready" ? ` · ${paper.num_pages} pages · ${paper.num_chunks} chunks` : ""}
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-3">
+            {paper.source === "arxiv" && <Badge>arXiv:{paper.id}</Badge>}
+            {paper.year && <span>{paper.year}</span>}
+            <span className="truncate">{authorsShort(paper.authors)}</span>
           </div>
-          {!!paper.categories.length && (
-            <div className="mt-1.5 flex flex-wrap gap-1">
-              {paper.categories.slice(0, 5).map((c) => (
-                <Badge key={c}>{c}</Badge>
-              ))}
-            </div>
-          )}
-          {paper.error && <p className="mt-1 text-xs text-critical">{paper.error}</p>}
+          <div className="mt-1.5 flex flex-wrap items-center gap-1">
+            {paper.categories.slice(0, 4).map((c) => (
+              <Badge key={c} tone="accent">
+                {c}
+              </Badge>
+            ))}
+            {paper.status === "ready" && (
+              <span className="ml-1 text-xs text-ink-3">
+                {paper.num_pages} pages · {paper.sections.length} sections · {paper.num_chunks} chunks
+              </span>
+            )}
+          </div>
+          {paper.error && <p className="mt-1 text-xs text-critical-ink">{paper.error}</p>}
         </div>
-        <div className="flex shrink-0 items-center gap-1">
-          <a href={pdfUrl(paper.id)} target="_blank" rel="noreferrer" className="rounded-md p-1.5 text-ink-3 hover:bg-surface-2 hover:text-ink" title="Open PDF">
-            <ExternalLink size={15} />
-          </a>
-          <Button variant="ghost" className="!p-1.5" title="Re-index" disabled={busy} onClick={() => act(() => api.reingest(paper.id))}>
-            <RefreshCw size={15} />
-          </Button>
-          <Button
-            variant="danger"
-            className="!p-1.5"
-            title="Delete"
+        <div className="col-start-2 -ml-2 mt-1.5 flex items-center gap-0.5 sm:col-start-3 sm:row-start-1 sm:ml-0 sm:mt-0">
+          <IconButton label="View PDF" onClick={() => openPdf({ paperId: paper.id, title: paper.title, page: 1 })}>
+            <FileText size={15} />
+          </IconButton>
+          <IconButton label="Re-index" disabled={busy} onClick={() => act(() => api.reingest(paper.id), "Re-indexing started")}>
+            <RefreshCw size={15} className={busy ? "animate-spin" : ""} />
+          </IconButton>
+          <ConfirmButton
+            label={`Delete "${paper.title}"`}
             disabled={busy}
-            onClick={() => confirm(`Delete "${paper.title}" and its index?`) && act(() => api.deletePaper(paper.id))}
+            onConfirm={() => act(() => api.deletePaper(paper.id), "Paper deleted")}
           >
             <Trash2 size={15} />
-          </Button>
+          </ConfirmButton>
         </div>
       </div>
       {open && (
-        <div className="ml-7 mt-3 space-y-3 text-sm">
+        <div className="animate-in ml-7 mt-3 space-y-3 text-sm">
           {paper.abstract && <p className="leading-relaxed text-ink-2">{paper.abstract}</p>}
           {!!paper.sections.length && (
             <div>
@@ -232,16 +267,37 @@ function PaperRow({ paper, onChange }: { paper: Paper; onChange: () => void }) {
               </div>
             </div>
           )}
-          <div className="text-xs text-ink-3">ID: {paper.id} · source: {paper.source}</div>
+          <div className="text-xs text-ink-3">
+            ID: {paper.id} · source: {paper.source}
+          </div>
         </div>
       )}
     </li>
   );
 }
 
+function PaperListSkeleton() {
+  return (
+    <ul className="divide-y divide-line" aria-label="Loading papers">
+      {[0, 1, 2].map((i) => (
+        <li key={i} className="flex gap-3 px-4 py-4">
+          <Skeleton className="mt-0.5 h-4 w-4" />
+          <div className="flex-1 space-y-2">
+            <Skeleton className="h-4 w-2/3" />
+            <Skeleton className="h-3 w-1/3" />
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 export default function LibraryPage() {
+  const toast = useToast();
   const [papers, setPapers] = useState<Paper[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState("");
+  const [seeding, setSeeding] = useState(false);
 
   const load = useCallback(() => {
     api
@@ -263,28 +319,95 @@ export default function LibraryPage() {
     return () => clearInterval(t);
   }, [busy, load]);
 
+  const added = (verb: string) => (n: number) => {
+    toast(`${verb} ${n} paper${n === 1 ? "" : "s"}. Indexing runs in the background.`, "good");
+    load();
+  };
+
+  const importClassics = async () => {
+    setSeeding(true);
+    try {
+      added("Imported")((await api.importArxiv(CLASSICS)).length);
+    } catch (e) {
+      toast((e as Error).message, "critical");
+    } finally {
+      setSeeding(false);
+    }
+  };
+
   const ready = papers?.filter((p) => p.status === "ready") ?? [];
   const chunks = ready.reduce((n, p) => n + p.num_chunks, 0);
+  const sections = ready.reduce((n, p) => n + p.sections.length, 0);
+  const years = ready.map((p) => p.year).filter((y): y is number => !!y);
+  const span = years.length ? `${Math.min(...years)}–${Math.max(...years)}` : "—";
+  const q = filter.trim().toLowerCase();
+  const shown =
+    papers?.filter((p) => !q || p.title.toLowerCase().includes(q) || p.authors.some((a) => a.toLowerCase().includes(q))) ?? [];
 
   return (
-    <div className="mx-auto w-full max-w-7xl space-y-5 px-4 py-6">
+    <div className="mx-auto w-full max-w-7xl space-y-6 px-4 py-8">
       <PageHeader
+        icon={BookOpen}
         title="Paper library"
-        subtitle={papers ? `${ready.length} indexed papers · ${chunks.toLocaleString()} searchable chunks` : "Loading…"}
+        subtitle="Import papers once. They're parsed into sections, chunked and indexed for search and cited answers."
       />
       <ErrorNote message={error} />
-      <div className="grid gap-4 md:grid-cols-2">
-        <ArxivImport onImported={load} />
-        <Upload onUploaded={load} />
+
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {papers === null ? (
+          [0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-21.5 rounded-xl" />)
+        ) : (
+          <>
+            <StatTile label="Papers indexed" value={ready.length} sub={busy ? "More indexing now…" : `${papers.length} in library`} />
+            <StatTile label="Searchable chunks" value={chunks.toLocaleString()} sub="~400 tokens each" />
+            <StatTile label="Sections detected" value={sections.toLocaleString()} sub="From headings and fonts" />
+            <StatTile label="Publication years" value={span} sub={years.length ? `${new Set(years).size} distinct` : "No dated papers"} />
+          </>
+        )}
       </div>
-      <Card>
-        {papers && papers.length === 0 ? (
-          <div className="px-4 py-10 text-center text-sm text-ink-3">
-            No papers yet. Import a few from arXiv to get started.
-          </div>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <ArxivImport onImported={added("Queued")} />
+        <Upload onUploaded={added("Uploaded")} />
+      </div>
+
+      <Card className="overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3">
+          <h2 className="text-sm font-semibold">
+            Papers {papers && <span className="font-normal text-ink-3">({q ? `${shown.length} of ${papers.length}` : papers.length})</span>}
+          </h2>
+          {papers && papers.length > FILTER_THRESHOLD && (
+            <input
+              className={inputSmClass + " w-full sm:w-64"}
+              placeholder="Filter by title or author…"
+              aria-label="Filter papers"
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+            />
+          )}
+        </div>
+        {papers === null ? (
+          <PaperListSkeleton />
+        ) : papers.length === 0 ? (
+          <EmptyState
+            icon={Library}
+            title="No papers yet"
+            actions={
+              <Button onClick={importClassics} loading={seeding}>
+                {!seeding && <Plus size={14} />} Import 4 classic papers
+              </Button>
+            }
+          >
+            Import from arXiv or upload PDFs above. Or start with Transformer, BERT, DPR and RAG, the papers the README
+            evaluation uses.
+          </EmptyState>
+        ) : shown.length === 0 ? (
+          <p className="px-4 py-8 text-center text-sm text-ink-3">No papers match “{filter}”.</p>
         ) : (
           <ul className="divide-y divide-line">
-            {papers?.map((p) => <PaperRow key={p.id} paper={p} onChange={load} />)}
+            {shown.map((p) => (
+              <PaperRow key={p.id} paper={p} onChange={load} />
+            ))}
           </ul>
         )}
       </Card>

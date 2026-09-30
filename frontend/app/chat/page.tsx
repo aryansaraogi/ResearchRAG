@@ -1,12 +1,22 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
-import { ArrowUp, ExternalLink, RotateCcw, SlidersHorizontal, Square } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  BookOpen,
+  Copy,
+  FileText,
+  MessageSquareText,
+  RefreshCw,
+  RotateCcw,
+  SlidersHorizontal,
+  Square,
+} from "lucide-react";
 import {
   api,
   pageLabel,
-  pdfUrl,
   streamChat,
   type ChatMessage,
   type Citation,
@@ -15,9 +25,12 @@ import {
   type RetrievedChunk,
   type SearchFilters,
 } from "@/lib/api";
+import { readJSON, writeJSON } from "@/lib/storage";
 import { AnswerMarkdown } from "@/components/AnswerMarkdown";
 import { FilterPanel, RetrievalSettings, activeFilterCount, useFacets } from "@/components/FilterPanel";
-import { Badge, Button, ErrorNote } from "@/components/ui";
+import { usePdfViewer } from "@/components/PdfViewer";
+import { useToast } from "@/components/Toast";
+import { Badge, Button, EmptyState, ErrorNote } from "@/components/ui";
 
 interface Turn {
   id: number;
@@ -35,8 +48,47 @@ const SUGGESTIONS = [
   "What limitations or failure cases do the authors acknowledge?",
 ];
 const HISTORY_TURNS = 6;
+const ARXIV_ID = /^\d{4}\.\d{4,5}(v\d+)?$/;
 
-let nextId = 1;
+/* ---------- Saved conversation (this browser only) ---------- */
+
+const STORE_KEY = "researchrag.chat.v1";
+const MAX_SAVED = 40;
+const EMPTY: Turn[] = [];
+let savedCache: Turn[] | undefined;
+
+function getSaved(): Turn[] {
+  if (savedCache === undefined) {
+    const raw = readJSON<unknown>(STORE_KEY, []);
+    savedCache = Array.isArray(raw)
+      ? raw.filter((t): t is Turn => (t?.role === "user" || t?.role === "assistant") && typeof t?.content === "string")
+      : [];
+  }
+  return savedCache;
+}
+
+function persist(turns: Turn[]) {
+  savedCache = turns.filter((t) => !t.streaming).slice(-MAX_SAVED);
+  writeJSON(STORE_KEY, savedCache);
+}
+
+const noSubscribe = () => () => {};
+
+/** Answer text plus a numbered reference list for the sources it actually cites. */
+function withReferences(turn: Turn) {
+  const sources = turn.sources ?? [];
+  const numbers = [...new Set((turn.citations ?? []).map((c) => c.number))].sort((a, b) => a - b);
+  const refs = numbers
+    .filter((n) => sources[n - 1])
+    .map((n) => {
+      const s = sources[n - 1];
+      const arxiv = ARXIV_ID.test(s.paper_id) ? `, arXiv:${s.paper_id}` : "";
+      return `[${n}] ${s.title}${arxiv} — §${s.section}, ${pageLabel(s.page_start, s.page_end)}`;
+    });
+  return { text: refs.length ? `${turn.content}\n\nReferences\n${refs.join("\n")}` : turn.content, count: refs.length };
+}
+
+/* ---------- Sources ---------- */
 
 function SourceCard({
   s,
@@ -53,6 +105,7 @@ function SourceCard({
   active: boolean;
   onSelect: () => void;
 }) {
+  const openPdf = usePdfViewer();
   const ref = useRef<HTMLLIElement>(null);
   // null = follow selection: a cited source opens in full until the reader toggles it
   const [expanded, setExpanded] = useState<boolean | null>(null);
@@ -67,11 +120,11 @@ function SourceCard({
     <li
       ref={ref}
       id={`source-${n}`}
-      className={`rounded-md border p-3 text-sm transition ${
+      className={`rounded-lg border bg-surface p-3 text-sm transition ${
         active ? "border-accent ring-2 ring-accent/20" : "border-line"
       } ${dimmed ? "opacity-70" : ""}`}
     >
-      <button type="button" onClick={onSelect} className="flex w-full items-start gap-2 text-left">
+      <button type="button" onClick={onSelect} className="flex w-full items-start gap-2 rounded text-left">
         <span
           className={`grid h-4.5 min-w-4.5 shrink-0 place-items-center rounded px-1 font-mono text-[10.5px] font-semibold ${
             active ? "bg-accent text-white" : "bg-accent-soft text-accent-ink"
@@ -90,18 +143,16 @@ function SourceCard({
       <p className="mt-2 whitespace-pre-line text-xs leading-relaxed text-ink-2">{text}</p>
       <div className="mt-2 flex items-center gap-3 text-xs">
         {s.text.length >= 280 && (
-          <button className="text-accent hover:underline" onClick={() => setExpanded(!open)}>
+          <button className="text-accent-ink hover:underline" onClick={() => setExpanded(!open)}>
             {open ? "Show less" : "Show more"}
           </button>
         )}
-        <a
-          href={pdfUrl(s.paper_id, s.page_start)}
-          target="_blank"
-          rel="noreferrer"
-          className="flex items-center gap-1 text-accent hover:underline"
+        <button
+          className="flex items-center gap-1 text-accent-ink hover:underline"
+          onClick={() => openPdf({ paperId: s.paper_id, title: s.title, page: s.page_start })}
         >
-          Open PDF <ExternalLink size={11} />
-        </a>
+          <FileText size={12} /> View p. {s.page_start}
+        </button>
       </div>
     </li>
   );
@@ -137,28 +188,39 @@ function SourcesList({
   );
 }
 
+/* ---------- Turns ---------- */
+
 function AssistantTurn({
   turn,
   selected,
+  isLast,
+  busy,
   activeSource,
   onCite,
   onClearSource,
+  onCopy,
+  onRegenerate,
 }: {
   turn: Turn;
   selected: boolean;
+  isLast: boolean;
+  busy: boolean;
   activeSource: number | null;
   onCite: (n: number) => void;
   onClearSource: () => void;
+  onCopy: () => void;
+  onRegenerate: () => void;
 }) {
   const sources = turn.sources ?? [];
   const [showSources, setShowSources] = useState(false);
   const sourcesOpen = showSources || (selected && activeSource != null);
   const waiting = turn.streaming && !turn.content;
+  const done = !turn.streaming;
 
   return (
-    <div className="space-y-2">
+    <div className="group animate-in space-y-2">
       <div className="flex items-center gap-2 text-xs text-ink-3">
-        <span className="grid h-5 w-5 place-items-center rounded bg-accent text-[10px] font-bold text-white">R</span>
+        <span className="grid h-5 w-5 place-items-center rounded-md bg-accent text-[10px] font-bold text-white">R</span>
         {turn.sources === undefined && turn.streaming
           ? "Searching your papers…"
           : `${sources.length} passages retrieved${turn.citations ? ` · ${turn.citations.length} cited` : ""}`}
@@ -175,33 +237,60 @@ function AssistantTurn({
         </div>
       )}
       <ErrorNote message={turn.error ?? null} />
-      {/* Below xl the side panel is hidden, so sources open inline under the answer */}
-      {!!sources.length && !turn.streaming && (
-        <div className="xl:hidden">
-          <button
-            className="text-xs text-accent hover:underline"
-            onClick={() => {
-              if (sourcesOpen && selected) onClearSource();
-              setShowSources(!sourcesOpen);
-            }}
-          >
-            {sourcesOpen ? "Hide sources" : `Show ${sources.length} sources`}
-          </button>
-          {sourcesOpen && (
-            <div className="mt-2">
-              <SourcesList turn={turn} activeSource={selected ? activeSource : null} onSelect={onCite} />
-            </div>
+
+      {done && (turn.content || (turn.error && isLast)) && (
+        // Older answers show their actions on hover/focus (desktop); the latest always shows them
+        <div
+          className={`-ml-2 flex flex-wrap items-center gap-0.5 ${
+            isLast ? "" : "lg:opacity-0 lg:transition lg:group-hover:opacity-100 lg:group-focus-within:opacity-100"
+          }`}
+        >
+          {turn.content && !turn.error && (
+            <Button variant="ghost" className="px-2! py-1! text-xs" onClick={onCopy}>
+              <Copy size={13} /> Copy
+            </Button>
           )}
+          {isLast && (
+            <Button variant="ghost" className="px-2! py-1! text-xs" onClick={onRegenerate} disabled={busy}>
+              <RefreshCw size={13} /> {turn.error ? "Retry" : "Regenerate"}
+            </Button>
+          )}
+          {!!sources.length && (
+            // Below xl the side panel is hidden, so sources open inline under the answer
+            <Button
+              variant="ghost"
+              className="px-2! py-1! text-xs xl:hidden"
+              aria-expanded={sourcesOpen}
+              onClick={() => {
+                if (sourcesOpen && selected) onClearSource();
+                setShowSources(!sourcesOpen);
+              }}
+            >
+              <BookOpen size={13} /> {sourcesOpen ? "Hide sources" : `${sources.length} sources`}
+            </Button>
+          )}
+        </div>
+      )}
+      {!!sources.length && done && sourcesOpen && (
+        <div className="xl:hidden">
+          <SourcesList turn={turn} activeSource={selected ? activeSource : null} onSelect={onCite} />
         </div>
       )}
     </div>
   );
 }
 
+/* ---------- Page ---------- */
+
 export default function ChatPage() {
   const facets = useFacets();
+  const toast = useToast();
   const [health, setHealth] = useState<Health | null>(null);
-  const [turns, setTurns] = useState<Turn[]>([]);
+  // Saved turns are read after hydration (the server renders an empty conversation)
+  const saved = useSyncExternalStore(noSubscribe, getSaved, () => EMPTY);
+  const [live, setLive] = useState<Turn[] | null>(null);
+  const turns = live ?? saved;
+  const restored = live === null && saved.length > 0;
   const [input, setInput] = useState("");
   const [filters, setFilters] = useState<SearchFilters>({});
   const [mode, setMode] = useState<RetrievalMode>("hybrid");
@@ -209,18 +298,31 @@ export default function ChatPage() {
   const [showSettings, setShowSettings] = useState(false);
   const [selectedTurn, setSelectedTurn] = useState<number | null>(null);
   const [activeSource, setActiveSource] = useState<number | null>(null);
+  const [atBottom, setAtBottom] = useState(true);
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const busy = turns.some((t) => t.streaming);
-  const selected = turns.find((t) => t.id === selectedTurn) ?? [...turns].reverse().find((t) => t.role === "assistant");
+  const lastAssistant = [...turns].reverse().find((t) => t.role === "assistant");
+  const selected = turns.find((t) => t.id === selectedTurn) ?? lastAssistant;
   const nFilters = activeFilterCount(filters);
 
   useEffect(() => {
     api.health().then(setHealth).catch(() => setHealth(null));
     return () => abortRef.current?.abort();
   }, []);
+
+  // Save finished conversations to this browser
+  useEffect(() => {
+    if (live !== null && !busy) persist(live);
+  }, [live, busy]);
+
+  // Open a restored conversation at its end
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (restored && el) el.scrollTop = el.scrollHeight;
+  }, [restored]);
 
   // Follow the stream while the reader is near the bottom
   const lastContent = turns.at(-1)?.content;
@@ -230,24 +332,27 @@ export default function ChatPage() {
   }, [turns.length, lastContent]);
 
   const patch = (id: number, p: Partial<Turn> | ((t: Turn) => Partial<Turn>)) =>
-    setTurns((ts) => ts.map((t) => (t.id === id ? { ...t, ...(typeof p === "function" ? p(t) : p) } : t)));
+    setLive((ts) => (ts ?? saved).map((t) => (t.id === id ? { ...t, ...(typeof p === "function" ? p(t) : p) } : t)));
 
-  const ask = async (question: string) => {
+  const scrollToEnd = (behavior: ScrollBehavior = "auto") =>
+    requestAnimationFrame(() => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior }));
+
+  /** Ask `question` after the turns in `base` (defaults to the whole conversation). */
+  const ask = async (question: string, base: Turn[] = turns) => {
     question = question.trim();
     if (!question || busy) return;
-    const history: ChatMessage[] = turns
+    const history: ChatMessage[] = base
       .filter((t) => !t.error && t.content)
       .slice(-HISTORY_TURNS)
       .map((t) => ({ role: t.role, content: t.content }));
-    const user: Turn = { id: nextId++, role: "user", content: question };
-    const bot: Turn = { id: nextId++, role: "assistant", content: "", streaming: true };
-    setTurns((ts) => [...ts, user, bot]);
+    const id = Math.max(0, ...base.map((t) => t.id)) + 1;
+    const user: Turn = { id, role: "user", content: question };
+    const bot: Turn = { id: id + 1, role: "assistant", content: "", streaming: true };
+    setLive([...base, user, bot]);
     setSelectedTurn(bot.id);
     setActiveSource(null);
     setInput("");
-    requestAnimationFrame(() => {
-      if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    });
+    scrollToEnd();
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -271,6 +376,23 @@ export default function ChatPage() {
     }
   };
 
+  const regenerate = (turnId: number) => {
+    const i = turns.findIndex((t) => t.id === turnId);
+    const question = turns[i - 1];
+    if (i < 1 || question?.role !== "user") return;
+    ask(question.content, turns.slice(0, i - 1));
+  };
+
+  const copy = async (turn: Turn) => {
+    const { text, count } = withReferences(turn);
+    try {
+      await navigator.clipboard.writeText(text);
+      toast(count ? `Copied with ${count} reference${count === 1 ? "" : "s"}` : "Copied answer", "good");
+    } catch {
+      toast("Couldn't copy to the clipboard", "critical");
+    }
+  };
+
   const cite = (turnId: number) => (n: number) => {
     setSelectedTurn(turnId);
     setActiveSource((cur) => (cur === n && selected?.id === turnId ? null : n));
@@ -278,9 +400,11 @@ export default function ChatPage() {
 
   const reset = () => {
     abortRef.current?.abort();
-    setTurns([]);
+    setLive([]);
+    persist([]);
     setSelectedTurn(null);
     setActiveSource(null);
+    textareaRef.current?.focus();
   };
 
   const settings = (
@@ -295,39 +419,47 @@ export default function ChatPage() {
       <aside className="hidden w-60 shrink-0 overflow-y-auto py-6 lg:block">{settings}</aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <div ref={scrollRef} className="flex-1 overflow-y-auto py-6">
+        <div
+          ref={scrollRef}
+          className="flex-1 overflow-y-auto py-6"
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 160);
+          }}
+        >
           {turns.length === 0 ? (
-            <div className="mx-auto max-w-xl pt-[10vh] text-center">
-              <h1 className="text-xl font-semibold tracking-tight">Ask your papers</h1>
-              <p className="mt-1 text-sm text-ink-2">
-                Answers are grounded in retrieved passages. Every claim carries a numbered citation you can open.
-              </p>
+            <div className="mx-auto max-w-xl pt-[6vh]">
+              <EmptyState icon={MessageSquareText} title="Ask your papers">
+                Answers come only from retrieved passages, and every claim carries a numbered citation you can open at
+                its page.
+              </EmptyState>
               {health && !health.llm_configured && (
-                <div className="mt-4 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-left text-sm text-ink-2">
+                <div className="mb-4 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-ink-2">
                   No Gemini API key is configured, so answers can&apos;t be generated. Set{" "}
                   <code className="font-mono text-xs">GEMINI_API_KEY</code> in <code className="font-mono text-xs">backend/.env</code>, or
                   use{" "}
-                  <Link href="/search" className="text-accent hover:underline">
+                  <Link href="/search" className="text-accent-ink hover:underline">
                     Search
                   </Link>{" "}
                   meanwhile.
                 </div>
               )}
               {facets && facets.papers.length === 0 && (
-                <p className="mt-4 text-sm text-ink-3">
+                <p className="mb-4 text-center text-sm text-ink-3">
                   No indexed papers yet.{" "}
-                  <Link href="/" className="text-accent hover:underline">
+                  <Link href="/" className="text-accent-ink hover:underline">
                     Add some to your library
                   </Link>{" "}
                   first.
                 </p>
               )}
-              <div className="mt-6 grid gap-2">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-3">Try asking</div>
+              <div className="mt-2 grid gap-2">
                 {SUGGESTIONS.map((s) => (
                   <button
                     key={s}
                     onClick={() => ask(s)}
-                    className="rounded-md border border-line bg-surface px-3 py-2 text-left text-sm text-ink-2 transition hover:border-ink-3 hover:text-ink"
+                    className="rounded-lg border border-line bg-surface px-3 py-2.5 text-left text-sm text-ink-2 shadow-card transition hover:border-accent/50 hover:text-ink"
                   >
                     {s}
                   </button>
@@ -335,11 +467,19 @@ export default function ChatPage() {
               </div>
             </div>
           ) : (
-            <div className="mx-auto max-w-3xl space-y-6">
+            <div className="mx-auto max-w-3xl space-y-7">
+              {restored && (
+                <p className="flex items-center justify-center gap-2 text-xs text-ink-3">
+                  Restored your last conversation.
+                  <button className="text-accent-ink hover:underline" onClick={reset}>
+                    Start a new one
+                  </button>
+                </p>
+              )}
               {turns.map((t) =>
                 t.role === "user" ? (
-                  <div key={t.id} className="flex justify-end">
-                    <div className="max-w-[85%] whitespace-pre-wrap rounded-lg bg-accent-soft px-3.5 py-2 text-sm text-ink">
+                  <div key={t.id} className="animate-in flex justify-end">
+                    <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-accent-soft px-4 py-2.5 text-sm text-ink">
                       {t.content}
                     </div>
                   </div>
@@ -348,9 +488,13 @@ export default function ChatPage() {
                     key={t.id}
                     turn={t}
                     selected={selected?.id === t.id}
+                    isLast={t.id === lastAssistant?.id}
+                    busy={busy}
                     activeSource={activeSource}
                     onCite={cite(t.id)}
                     onClearSource={() => setActiveSource(null)}
+                    onCopy={() => copy(t)}
+                    onRegenerate={() => regenerate(t.id)}
                   />
                 ),
               )}
@@ -358,9 +502,17 @@ export default function ChatPage() {
           )}
         </div>
 
-        <div className="mx-auto w-full max-w-3xl pb-4">
+        <div className="relative mx-auto w-full max-w-3xl pb-4">
+          {!atBottom && turns.length > 0 && (
+            <button
+              onClick={() => scrollToEnd("smooth")}
+              className="animate-in absolute -top-11 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full border border-line bg-surface px-3 py-1.5 text-xs text-ink-2 shadow-pop hover:text-ink"
+            >
+              <ArrowDown size={13} /> {busy ? "Jump to live answer" : "Jump to latest"}
+            </button>
+          )}
           {showSettings && (
-            <div className="mb-2 max-h-[50dvh] overflow-y-auto rounded-lg border border-line bg-surface p-4 lg:hidden">
+            <div className="mb-2 max-h-[50dvh] overflow-y-auto rounded-xl border border-line bg-surface p-4 shadow-pop lg:hidden">
               {settings}
             </div>
           )}
@@ -369,13 +521,14 @@ export default function ChatPage() {
               e.preventDefault();
               ask(input);
             }}
-            className="rounded-lg border border-line bg-surface p-2 focus-within:border-accent focus-within:ring-2 focus-within:ring-accent/20"
+            className="rounded-xl border border-line bg-surface p-2 shadow-card transition focus-within:border-accent focus-within:ring-2 focus-within:ring-accent/20"
           >
             <textarea
               ref={textareaRef}
               rows={2}
               value={input}
               autoFocus
+              aria-label="Question"
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -401,10 +554,11 @@ export default function ChatPage() {
                 {mode === "sparse" ? "BM25" : mode}
                 {rerank ? " + rerank" : ""}
                 {nFilters ? ` · ${nFilters} filter${nFilters > 1 ? "s" : ""}` : ""}
+                <span className="hidden xl:inline"> · Enter to send, Shift+Enter for a new line</span>
               </span>
               <div className="ml-auto flex items-center gap-1">
                 {!!turns.length && (
-                  <Button type="button" variant="ghost" onClick={reset} title="New conversation">
+                  <Button type="button" variant="ghost" onClick={reset} title="Start a new conversation">
                     <RotateCcw size={14} />
                     <span className="hidden sm:inline">New</span>
                   </Button>

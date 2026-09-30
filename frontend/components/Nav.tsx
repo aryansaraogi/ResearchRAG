@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { BookOpen, FlaskConical, MessageSquareText, Search } from "lucide-react";
 import { api, type Health } from "@/lib/api";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
 const LINKS = [
   { href: "/", label: "Library", icon: BookOpen },
@@ -44,34 +45,38 @@ export function Nav() {
           : "No Gemini key: search only";
 
   return (
-    <header className="sticky top-0 z-20 border-b border-line bg-surface/90 backdrop-blur">
-      <div className="mx-auto flex h-14 max-w-7xl items-center gap-6 px-4">
-        <Link href="/" className="flex items-center gap-2 font-semibold tracking-tight">
-          <span className="grid h-7 w-7 place-items-center rounded-md bg-accent text-sm font-bold text-white">R</span>
+    <header className="sticky top-0 z-20 border-b border-line bg-surface/85 backdrop-blur">
+      <div className="mx-auto flex h-14 max-w-7xl items-center gap-3 px-4 sm:gap-6">
+        <Link href="/" className="flex shrink-0 items-center gap-2 font-semibold tracking-tight" aria-label="ResearchRAG home">
+          <span className="grid h-7 w-7 place-items-center rounded-lg bg-accent text-sm font-bold text-white shadow-card">R</span>
           <span className="hidden sm:inline">ResearchRAG</span>
         </Link>
-        <nav className="flex items-center gap-1 overflow-x-auto">
+        <nav className="flex items-center gap-0.5 sm:gap-1" aria-label="Main">
           {LINKS.map(({ href, label, icon: Icon }) => {
             const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
             return (
               <Link
                 key={href}
                 href={href}
-                className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors ${
-                  active ? "bg-accent-soft text-accent-ink font-medium" : "text-ink-2 hover:bg-surface-2 hover:text-ink"
+                aria-label={label}
+                aria-current={active ? "page" : undefined}
+                title={label}
+                className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm transition-colors sm:px-3 ${
+                  active ? "bg-accent-soft font-medium text-accent-ink" : "text-ink-2 hover:bg-surface-2 hover:text-ink"
                 }`}
               >
-                <Icon size={15} />
-                {label}
+                <Icon size={16} />
+                <span className="hidden sm:inline">{label}</span>
               </Link>
             );
           })}
         </nav>
-        <div className="ml-auto hidden items-center gap-2 text-xs text-ink-3 md:flex" title={health?.qdrant}>
-          <span
-            className={`h-2 w-2 rounded-full ${ok ? (health?.llm_configured ? "bg-good" : "bg-warning") : "bg-critical"}`}
-          />
-          {status}
+        <div className="ml-auto flex items-center gap-2">
+          <div className="flex items-center gap-2 px-1 text-xs text-ink-3" title={`${status}${health && health.qdrant !== "ok" ? ` (${health.qdrant})` : ""}`}>
+            <span className={`h-2 w-2 shrink-0 rounded-full ${ok ? (health?.llm_configured ? "bg-good" : "bg-warning") : "bg-critical"}`} />
+            <span className="sr-only md:not-sr-only">{status}</span>
+          </div>
+          <ThemeToggle />
         </div>
       </div>
     </header>

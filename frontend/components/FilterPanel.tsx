@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { X } from "lucide-react";
 import { api, type Facets, type RetrievalMode, type SearchFilters } from "@/lib/api";
-import { inputClass } from "@/components/ui";
+import { inputSmClass } from "@/components/ui";
 
 export function useFacets() {
   const [facets, setFacets] = useState<Facets | null>(null);
@@ -147,7 +147,7 @@ export function FilterPanel({
         <div className="flex items-center gap-2">
           <input
             type="number"
-            className={inputClass + " py-1"}
+            className={inputSmClass + " w-full min-w-0"}
             placeholder={facets?.year_min?.toString() ?? "from"}
             value={filters.year_min ?? ""}
             onChange={(e) => set({ year_min: e.target.value ? Number(e.target.value) : null })}
@@ -156,7 +156,7 @@ export function FilterPanel({
           <span className="text-ink-3">–</span>
           <input
             type="number"
-            className={inputClass + " py-1"}
+            className={inputSmClass + " w-full min-w-0"}
             placeholder={facets?.year_max?.toString() ?? "to"}
             value={filters.year_max ?? ""}
             onChange={(e) => set({ year_max: e.target.value ? Number(e.target.value) : null })}
@@ -199,7 +199,7 @@ export function FilterPanel({
         <div className="flex gap-1.5">
           <input
             list="author-options"
-            className={inputClass + " py-1"}
+            className={inputSmClass + " w-full min-w-0"}
             placeholder="Add author…"
             value={author}
             onChange={(e) => setAuthor(e.target.value)}
