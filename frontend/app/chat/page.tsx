@@ -42,12 +42,14 @@ function SourceCard({
   s,
   n,
   cited,
+  dimmed,
   active,
   onSelect,
 }: {
   s: RetrievedChunk;
   n: number;
   cited: boolean;
+  dimmed: boolean;
   active: boolean;
   onSelect: () => void;
 }) {
@@ -67,7 +69,7 @@ function SourceCard({
       id={`source-${n}`}
       className={`rounded-md border p-3 text-sm transition ${
         active ? "border-accent ring-2 ring-accent/20" : "border-line"
-      } ${cited || active ? "" : "opacity-70"}`}
+      } ${dimmed ? "opacity-70" : ""}`}
     >
       <button type="button" onClick={onSelect} className="flex w-full items-start gap-2 text-left">
         <span
@@ -125,6 +127,8 @@ function SourcesList({
           s={s}
           n={i + 1}
           cited={cited.has(i + 1)}
+          // Only fade uncited sources when the answer actually cites something
+          dimmed={cited.size > 0 && !cited.has(i + 1) && activeSource !== i + 1}
           active={activeSource === i + 1}
           onSelect={() => onSelect(i + 1)}
         />

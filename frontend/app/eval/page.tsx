@@ -83,6 +83,7 @@ function DatasetCard({
   const [error, setError] = useState<string | null>(null);
   const running = status?.state === "running";
   const papers = new Set(items?.map((i) => i.paper_id)).size;
+  const manual = items?.filter((i) => i.source === "manual").length ?? 0;
 
   const generate = async () => {
     setError(null);
@@ -102,6 +103,7 @@ function DatasetCard({
       <div className="mt-3 text-2xl font-semibold">{items ? items.length : "—"}</div>
       <div className="text-xs text-ink-3">
         {items?.length ? `questions across ${papers} paper${papers === 1 ? "" : "s"}` : "questions, none generated yet"}
+        {manual > 0 && ` · ${manual} hand-written`}
       </div>
 
       <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -113,7 +115,7 @@ function DatasetCard({
             max={200}
             value={n}
             onChange={(e) => setN(Math.min(200, Math.max(5, Number(e.target.value) || 5)))}
-            className={inputClass + " w-20 py-1"}
+            className={inputClass + " w-20! py-1!"}
             aria-label="Number of questions"
           />
         </label>
@@ -133,6 +135,11 @@ function DatasetCard({
           {items?.length && !append ? "Regenerate" : "Generate"}
         </Button>
       </div>
+      {manual > 0 && !append && llmReady && (
+        <p className="mt-2 text-xs text-ink-3">
+          Regenerating replaces the {manual} hand-written questions. Tick Append to keep them.
+        </p>
+      )}
       {status && status.state !== "idle" && (
         <p className={`mt-2 text-xs ${status.state === "failed" ? "text-critical" : "text-ink-3"}`}>
           {status.state === "done" ? `Last generation: ${status.message}` : status.message}
@@ -254,7 +261,7 @@ function NewRunCard({
         </tbody>
       </table>
       <div className="mt-3 flex flex-wrap items-center gap-2">
-        <label className="flex items-center gap-1.5 text-sm text-ink-2">
+        <label className="flex items-center gap-1.5 whitespace-nowrap text-sm text-ink-2">
           Judge first
           <input
             type="number"
@@ -262,7 +269,7 @@ function NewRunCard({
             value={maxGen}
             placeholder="all"
             onChange={(e) => setMaxGen(e.target.value.replace(/\D/g, ""))}
-            className={inputClass + " w-20 py-1"}
+            className={inputClass + " w-20! py-1!"}
             aria-label="Questions to judge"
             disabled={!gen.length}
           />

@@ -121,13 +121,20 @@ uv run python scripts/eval_cli.py run --gen hybrid_rrf_rerank --max-gen 20 --out
 
 ### Results
 
-<!-- Fill in after running the evaluation on your corpus. -->
-| Config | Hit@1 | Recall@5 | MRR | nDCG@10 |
-|---|---|---|---|---|
-| Dense | – | – | – | – |
-| BM25 | – | – | – | – |
-| Hybrid (RRF) | – | – | – | – |
-| Hybrid + rerank | – | – | – | – |
+Retrieval on the four example papers (Transformer, BERT, DPR, RAG; 153 chunks), scored on 28 hand-written questions, 7 per paper. Each question was written from one passage read directly from the chunked PDFs, not picked through search, so the gold labels don't favor any retriever. Latency is the mean per query on a 4-core CPU.
+
+| Config | Hit@1 | Hit@5 | MRR | nDCG@10 | Latency |
+|---|---|---|---|---|---|
+| Dense | 0.786 | 0.929 | 0.830 | 0.854 | 102 ms |
+| BM25 | 0.643 | 0.964 | 0.765 | 0.815 | 18 ms |
+| Hybrid (RRF) | **0.786** | **0.964** | **0.851** | **0.879** | 91 ms |
+| Hybrid + rerank | 0.714 | 0.964 | 0.808 | 0.847 | 5.3 s |
+
+- Hybrid RRF has the highest MRR and nDCG. It keeps dense retrieval's precision at rank 1 and BM25's recall at rank 5.
+- The `ms-marco-MiniLM-L-6-v2` cross-encoder doesn't help here. Six gold passages slip from #1–4 to one place lower, and two move up. The passages it promotes share the question's key terms but don't contain the answer, for example an appendix that names "Thorough Decoding" without defining it. This small web-search model isn't tuned for scientific text, and a larger reranker such as `BAAI/bge-reranker-base` may do better.
+- With 28 questions, one question moves MRR by up to 0.036, so treat differences under about 0.05 as noise.
+
+The question set is in `backend/app/evaluation/manual_questions.jsonl`. To reproduce the table, copy it to `backend/data/eval/dataset.jsonl` and run the retrieval evaluation. Chunk IDs are deterministic, so the gold labels match as long as the same PDF versions are indexed. Answer-quality metrics need a Gemini key and are not reported yet.
 
 **Caveats.**
 - Synthetic questions are written from a single chunk, so they tend to reuse its vocabulary, which favors lexical retrieval. The prompt asks for paraphrased, self-contained questions to reduce this.
