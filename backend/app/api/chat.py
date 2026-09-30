@@ -5,7 +5,9 @@ from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from app.generation import rag
-from app.generation.llm import LLMNotConfigured
+from google.genai import errors
+
+from app.generation.llm import LLMNotConfigured, describe_error
 from app.retrieval.filters import SearchFilters
 from app.retrieval.hybrid import RetrievalMode
 
@@ -37,6 +39,8 @@ def chat(req: ChatRequest):
         return rag.answer(**_args(req))
     except LLMNotConfigured as e:
         raise HTTPException(503, str(e)) from e
+    except errors.APIError as e:
+        raise HTTPException(503 if e.code in (429, 503) else 502, describe_error(e)) from e
 
 
 @router.post("/stream")
@@ -47,6 +51,6 @@ def chat_stream(req: ChatRequest):
                 data = payload.model_dump() if hasattr(payload, "model_dump") else payload
                 yield {"event": kind, "data": json.dumps(data)}
         except Exception as e:  # noqa: BLE001 - surface errors to the client as an event
-            yield {"event": "error", "data": json.dumps(str(e))}
+            yield {"event": "error", "data": json.dumps(describe_error(e))}
 
     return EventSourceResponse(events())

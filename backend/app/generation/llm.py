@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import json
 import threading
 import time
@@ -37,8 +38,21 @@ class _RateLimiter:
             time.sleep(delay)
 
 
+def _quota_violations(e: errors.APIError) -> list[dict]:
+    body = e.details if isinstance(e.details, dict) else {}
+    return [v for d in body.get("error", {}).get("details", []) for v in d.get("violations", [])]
+
+
+def _daily_quota_exhausted(e: BaseException) -> bool:
+    """Free-tier per-day quotas are small (20 requests/day for some Flash models) and retrying can't help."""
+    return (isinstance(e, errors.APIError) and e.code == 429
+            and any("PerDay" in v.get("quotaId", "") for v in _quota_violations(e)))
+
+
 def _retryable(e: BaseException) -> bool:
-    return isinstance(e, errors.APIError) and (e.code == 429 or (e.code or 0) >= 500)
+    if not isinstance(e, errors.APIError) or _daily_quota_exhausted(e):
+        return False
+    return e.code == 429 or (e.code or 0) >= 500
 
 
 _retry = retry(
@@ -47,6 +61,31 @@ _retry = retry(
     stop=stop_after_attempt(6),
     reraise=True,
 )
+# Someone is watching a chat answer: give up sooner (~30 s of backoff) than batch jobs do
+_stream_retry = retry(
+    retry=retry_if_exception(_retryable),
+    wait=wait_exponential(multiplier=2, min=4, max=16),
+    stop=stop_after_attempt(4),
+    reraise=True,
+)
+
+
+def describe_error(e: BaseException) -> str:
+    """A message fit for the UI; Gemini's raw errors are JSON dumps."""
+    if isinstance(e, errors.APIError):
+        if _daily_quota_exhausted(e):
+            v = _quota_violations(e)[0]
+            model = v.get("quotaDimensions", {}).get("model", "this model")
+            limit = f" ({v['quotaValue']} requests/day)" if v.get("quotaValue") else ""
+            return (f"Gemini's free daily quota for {model} is used up{limit}. It resets at midnight Pacific time. "
+                    "To keep going, set GEMINI_MODEL in backend/.env to another model, e.g. gemini-3.5-flash-lite.")
+        if e.code == 429:
+            return "Gemini rate limit reached. Wait a minute and try again, or lower GEMINI_RPM in backend/.env."
+        if (e.code or 0) >= 500:
+            return (f"Gemini is overloaded right now ({e.code}). Try again in a moment, "
+                    "or set GEMINI_MODEL in backend/.env to a less busy model.")
+        return f"Gemini request failed ({e.code}): {e.message}"
+    return str(e)
 
 
 class LLMClient:
@@ -85,11 +124,19 @@ class LLMClient:
         )
         return json.loads(resp.text or "null")
 
-    def stream(self, prompt: str, system: str | None = None, temperature: float = 0.2) -> Iterator[str]:
+    @_stream_retry
+    def _open_stream(self, prompt: str, system: str | None, temperature: float):
+        # The request is sent on the first next(), so fetch the first chunk inside the retry
         self._limiter.wait()
-        for event in self._client.models.generate_content_stream(
+        events = iter(self._client.models.generate_content_stream(
             model=self.model, contents=prompt, config=self._config(system, temperature)
-        ):
+        ))
+        return next(events, None), events
+
+    def stream(self, prompt: str, system: str | None = None, temperature: float = 0.2) -> Iterator[str]:
+        """Retries on 429/5xx only until the first chunk arrives; later errors propagate."""
+        first, events = self._open_stream(prompt, system, temperature)
+        for event in itertools.chain([first] if first else [], events):
             if event.text:
                 yield event.text
 
