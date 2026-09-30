@@ -1,0 +1,79 @@
+"use client";
+
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
+import { BookOpen, FlaskConical, MessageSquareText, Search } from "lucide-react";
+import { api, type Health } from "@/lib/api";
+
+const LINKS = [
+  { href: "/", label: "Library", icon: BookOpen },
+  { href: "/search", label: "Search", icon: Search },
+  { href: "/chat", label: "Ask", icon: MessageSquareText },
+  { href: "/eval", label: "Evaluation", icon: FlaskConical },
+];
+
+export function Nav() {
+  const pathname = usePathname();
+  const [health, setHealth] = useState<Health | null>(null);
+  const [down, setDown] = useState(false);
+
+  useEffect(() => {
+    const check = () =>
+      api
+        .health()
+        .then((h) => {
+          setHealth(h);
+          setDown(false);
+        })
+        .catch(() => setDown(true));
+    check();
+    const t = setInterval(check, 15000);
+    return () => clearInterval(t);
+  }, []);
+
+  const ok = !down && health?.qdrant === "ok";
+  const status = down
+    ? "API offline"
+    : !health
+      ? "Connecting…"
+      : health.qdrant !== "ok"
+        ? "Vector store unreachable"
+        : health.llm_configured
+          ? health.llm_model
+          : "No Gemini key: search only";
+
+  return (
+    <header className="sticky top-0 z-20 border-b border-line bg-surface/90 backdrop-blur">
+      <div className="mx-auto flex h-14 max-w-7xl items-center gap-6 px-4">
+        <Link href="/" className="flex items-center gap-2 font-semibold tracking-tight">
+          <span className="grid h-7 w-7 place-items-center rounded-md bg-accent text-sm font-bold text-white">R</span>
+          <span className="hidden sm:inline">ResearchRAG</span>
+        </Link>
+        <nav className="flex items-center gap-1 overflow-x-auto">
+          {LINKS.map(({ href, label, icon: Icon }) => {
+            const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
+            return (
+              <Link
+                key={href}
+                href={href}
+                className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors ${
+                  active ? "bg-accent-soft text-accent-ink font-medium" : "text-ink-2 hover:bg-surface-2 hover:text-ink"
+                }`}
+              >
+                <Icon size={15} />
+                {label}
+              </Link>
+            );
+          })}
+        </nav>
+        <div className="ml-auto hidden items-center gap-2 text-xs text-ink-3 md:flex" title={health?.qdrant}>
+          <span
+            className={`h-2 w-2 rounded-full ${ok ? (health?.llm_configured ? "bg-good" : "bg-warning") : "bg-critical"}`}
+          />
+          {status}
+        </div>
+      </div>
+    </header>
+  );
+}
