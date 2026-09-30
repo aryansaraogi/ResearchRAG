@@ -1,0 +1,33 @@
+[project]
+name = "researchrag"
+version = "0.1.0"
+description = "AI research paper intelligence platform: hybrid RAG with citations and evaluation"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "python-multipart>=0.0.9",
+    "pydantic-settings>=2.4",
+    "sqlmodel>=0.0.22",
+    "pymupdf>=1.24",
+    "arxiv>=2.1",
+    "qdrant-client>=1.12",
+    "fastembed>=0.5",
+    "google-genai>=1.0",
+    "tenacity>=9.0",
+    "sse-starlette>=2.1",
+    "httpx>=0.27",
+    # Pinned: newer onnxruntime wheels segfault on Windows machines with an
+    # MSVC runtime older than 14.40 (msvcp140.dll). Unpin once that is updated.
+    "onnxruntime==1.19.2",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.3"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.uv]
+package = false
