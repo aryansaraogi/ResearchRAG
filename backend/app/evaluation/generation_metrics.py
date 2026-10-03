@@ -40,8 +40,8 @@ def _fmt_sources(sources: list[RetrievedChunk]) -> str:
     return "\n\n".join(f"[{i}] ({s.title} — §{s.section})\n{s.text}" for i, s in enumerate(sources, 1))
 
 
-def judge(llm: LLMClient, question: str, reference: str, answer: str,
-          sources: list[RetrievedChunk]) -> tuple[dict[str, float], dict[tuple[int, int], bool]]:
+def judge(llm: LLMClient, question: str, reference: str, answer: str, sources: list[RetrievedChunk],
+          info: dict | None = None) -> tuple[dict[str, float], dict[tuple[int, int], bool]]:
     claims = claims_with_citations(answer)
     pairs = "\n".join(
         f"- claim {i}, source [{n}]: {text}" for i, (text, nums) in enumerate(claims) for n in nums
@@ -51,7 +51,7 @@ def judge(llm: LLMClient, question: str, reference: str, answer: str,
         f"Sources:\n{_fmt_sources(sources)}\n\nAnswer under evaluation:\n{answer}\n\n"
         f"Citations to verify:\n{pairs}"
     )
-    raw = llm.generate_json(prompt, system=JUDGE_SYSTEM, schema=JudgeResult)
+    raw = llm.generate_json(prompt, system=JUDGE_SYSTEM, schema=JudgeResult, info=info)
     result = JudgeResult.model_validate(raw)
 
     def norm(x: int) -> float:

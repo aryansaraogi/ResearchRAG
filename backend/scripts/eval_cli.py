@@ -18,9 +18,9 @@ from app.evaluation import dataset as ds  # noqa: E402
 from app.evaluation.runner import CONFIGS, evaluate  # noqa: E402
 from app.generation.llm import get_llm  # noqa: E402
 
-TABLE_METRICS = ["hit@1", "recall@5", "recall@10", "mrr", "ndcg@10", "latency_ms",
+TABLE_METRICS = ["hit@1", "recall@5", "recall@10", "mrr", "ndcg@10", "mrr_adj", "latency_ms",
                  "faithfulness", "answer_relevance", "correctness", "citation_precision",
-                 "citation_coverage", "gold_cited"]
+                 "citation_coverage", "gold_cited", "refusal_accuracy", "false_refusal_rate"]
 
 
 def print_table(results: dict) -> None:

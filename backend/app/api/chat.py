@@ -24,7 +24,7 @@ class ChatRequest(BaseModel):
     history: list[Message] = []
     filters: SearchFilters | None = None
     mode: RetrievalMode = RetrievalMode.hybrid
-    rerank: bool = True
+    rerank: bool = False  # cross-encoder adds ~4 s on CPU; see the README evaluation
     top_k: int = Field(default=8, ge=1, le=20)
 
 

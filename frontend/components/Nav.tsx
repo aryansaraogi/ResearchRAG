@@ -72,7 +72,9 @@ export function Nav() {
           })}
         </nav>
         <div className="ml-auto flex items-center gap-2">
-          <div className="flex items-center gap-2 px-1 text-xs text-ink-3" title={`${status}${health && health.qdrant !== "ok" ? ` (${health.qdrant})` : ""}`}>
+          <div className="flex items-center gap-2 px-1 text-xs text-ink-3" title={`${status}${health && health.qdrant !== "ok" ? ` (${health.qdrant})` : ""}${
+              health?.llm_configured && health.llm_fallbacks?.length ? `\nFallbacks: ${health.llm_fallbacks.join(", ")}` : ""
+            }`}>
             <span className={`h-2 w-2 shrink-0 rounded-full ${ok ? (health?.llm_configured ? "bg-good" : "bg-warning") : "bg-critical"}`} />
             <span className="sr-only md:not-sr-only">{status}</span>
           </div>

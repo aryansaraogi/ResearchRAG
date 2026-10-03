@@ -19,6 +19,20 @@ Rules:
 """
 
 
+CONDENSE_SYSTEM = "You turn follow-up questions about research papers into standalone search queries."
+
+
+def condense_prompt(question: str, history: list[dict]) -> str:
+    # Long answers add little for resolving "it"/"they"; keep the tail of the conversation, trimmed
+    turns = [f"{m['role'].upper()}: {m['content'][:600]}" for m in history[-4:]]
+    return (
+        "Conversation so far:\n" + "\n".join(turns) + f"\n\nFollow-up question: {question}\n\n"
+        "Rewrite the follow-up as ONE self-contained question that can be searched without the conversation: "
+        'replace words like "it", "they", "that model" or "the second one" with what they refer to, and keep '
+        "technical terms exact. If it is already self-contained, return it unchanged. Reply with the question only."
+    )
+
+
 def format_sources(chunks: list[RetrievedChunk]) -> str:
     blocks = []
     for i, c in enumerate(chunks, start=1):

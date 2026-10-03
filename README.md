@@ -5,8 +5,9 @@ ResearchRAG is a full-stack retrieval-augmented generation (RAG) platform for re
 - **Ingestion:** arXiv import (by ID or topic search) or PDF upload. PDFs are parsed into sections using typography cues and two-column reading order, then chunked with section-aware boundaries.
 - **Hybrid retrieval:**
   - dense BGE embeddings and sparse BM25, fused with reciprocal rank fusion (RRF) in Qdrant;
-  - then a cross-encoder reranker;
+  - then an optional cross-encoder reranker (off by default, since it costs ~4 s per query and only helped keyword-style questions in the evaluation);
   - with metadata filters on year, author, arXiv category, paper and section type.
+- **Conversational follow-ups:** a follow-up such as "what are its limitations?" is rewritten into a standalone question before retrieval, and the UI shows what was searched.
 - **Citation-aware generation:** Gemini answers only from numbered sources and cites every claim. Citation markers are checked against the retrieved sources and mapped back to the paper, section and page. The UI opens the PDF at the cited page.
 - **Automated evaluation:**
   - synthetic question sets with gold passages;
@@ -25,11 +26,12 @@ flowchart LR
   end
   D --> Q[(Qdrant<br/>named dense + sparse vectors<br/>payload: year, authors, section…)]
   subgraph Query
-    U[Question + filters] --> P1[Dense prefetch top-50]
-    U --> P2[BM25 prefetch top-50]
+    U[Question + filters] --> W[Follow-up rewrite<br/>standalone query]
+    W --> P1[Dense prefetch top-50]
+    W --> P2[BM25 prefetch top-50]
     P1 --> F[RRF fusion]
     P2 --> F
-    F --> R[Cross-encoder rerank<br/>top-20 → top-8]
+    F --> R[Optional cross-encoder<br/>rerank top-20 → top-8]
     R --> G[Gemini: numbered sources,<br/>cite every claim]
     G --> V[Citation validation<br/>+ source mapping]
   end
@@ -42,7 +44,7 @@ flowchart LR
 |---|---|
 | API | FastAPI, Pydantic v2, SQLModel/SQLite (paper metadata and eval runs), SSE streaming |
 | Retrieval | Qdrant (server or embedded), FastEmbed: `BAAI/bge-small-en-v1.5` (dense), `Qdrant/bm25` (sparse, IDF), `Xenova/ms-marco-MiniLM-L-6-v2` (cross-encoder). All ONNX, CPU-only, no torch. |
-| Generation | Google Gemini (`google-genai`), client-side rate limiting and retry for the free tier |
+| Generation | Google Gemini (`google-genai`) with a model fallback chain, rolling-window rate limiting and retry for the free tier |
 | Frontend | Next.js 16 (App Router), React 19, Tailwind CSS 4, Recharts, react-markdown + KaTeX |
 
 ## Quick start
@@ -174,7 +176,9 @@ The hand-written questions are in `backend/app/evaluation/manual_questions.jsonl
   - Text is NFKC-normalized so ligatures like "ﬁ" match keyword search.
 - **Chunking.** Chunks are packed at sentence level (~400 tokens), never cross a section boundary, carry page ranges for citations, and overlap by 15%. Each chunk is embedded with its paper title and section heading as a prefix.
 - **Hybrid search.** Both prefetches apply the same payload filter, so filtering happens before fusion rather than after. RRF avoids calibrating dense and sparse scores against each other.
-- **Reranking cost.** Cross-encoder cost grows linearly with candidates (~0.15 s each on a 4-core CPU), so only the top `RERANK_CANDIDATES` fused results (default 20) are reranked.
+- **Reranking cost.** Cross-encoder cost grows linearly with candidates (~0.15 s each on a 4-core CPU), so only the top `RERANK_CANDIDATES` fused results (default 20) are reranked. It is off by default in Search and Ask: plain hybrid answers in under 0.1 s and scored best on the hand-written questions.
+- **Follow-ups.** Retrieval sees a single string, so with conversation history Gemini first rewrites the question into a standalone one (one short extra call). If the rewrite fails, the question is searched as asked.
+- **Model fallback.** `GEMINI_FALLBACK_MODELS` lists models to try when the main one returns 503 (overloaded), 429 or 404. A failing model is skipped for a cooldown (1 minute, or 1 hour for a used-up daily quota), and the UI notes when a fallback wrote the answer.
 - **Citations.** The model sees sources as `[n] Title — §Section, p. X`. After generation, out-of-range markers are stripped and the rest are resolved to chunk, paper, section and page.
 - **Free-tier friendly.** A client-side limiter spaces Gemini calls to `GEMINI_RPM`, and 429 and 5xx responses are retried with exponential backoff.
 
@@ -204,5 +208,5 @@ Run the tests with `cd backend && uv run pytest`.
 - **`Storage folder ... is already accessed by another instance`.** Embedded Qdrant is single-process. Stop the API before running the CLI, or switch to server mode.
 - **Gemini 429s.**
   - Per-minute limits: lower `GEMINI_RPM`, or evaluate fewer questions with `--max-gen`.
-  - Daily quota: the error names the model and its limit. Free-tier quotas are per model per day, and full Flash models allow as few as 20 requests. Waiting won't help until the reset at midnight Pacific time, so the client doesn't retry. Switch `GEMINI_MODEL` to another model the key lists, such as `gemini-3.5-flash-lite`.
-- **Gemini 503 "high demand".** The model is overloaded. Calls are retried with backoff. If it persists, switch `GEMINI_MODEL` to a less busy model.
+  - Daily quota: the error names the model and its limit. Free-tier quotas are per model per day, and full Flash models allow as few as 20 requests. Waiting won't help until the reset at midnight Pacific time, so the client moves on to the next model in `GEMINI_FALLBACK_MODELS` instead of retrying. If every model is used up, add another one your key lists.
+- **Gemini 503 "high demand".** The model is overloaded. The client falls back to the next model, and retries the whole chain with backoff if all of them are busy. If it persists, add a less busy model to `GEMINI_FALLBACK_MODELS`.

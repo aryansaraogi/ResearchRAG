@@ -43,4 +43,5 @@ def health():
     except Exception as e:  # noqa: BLE001
         qdrant = f"unreachable: {e}"
     return {"qdrant": qdrant, "qdrant_mode": "server" if s.qdrant_url else "embedded",
-            "llm_configured": bool(s.gemini_api_key), "llm_model": s.gemini_model}
+            "llm_configured": bool(s.gemini_api_key), "llm_model": s.gemini_model,
+            "llm_fallbacks": s.fallback_models}

@@ -11,7 +11,7 @@ class SearchRequest(BaseModel):
     query: str = Field(min_length=1)
     filters: SearchFilters | None = None
     mode: RetrievalMode = RetrievalMode.hybrid
-    rerank: bool = True
+    rerank: bool = False  # cross-encoder adds ~4 s on CPU; see the README evaluation
     top_k: int = Field(default=10, ge=1, le=50)
 
 

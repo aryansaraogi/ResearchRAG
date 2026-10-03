@@ -15,6 +15,10 @@ class Settings(BaseSettings):
 
     gemini_api_key: str = ""
     gemini_model: str = "gemini-3.5-flash-lite"
+    # Tried in order when the model above is overloaded or out of quota (comma-separated)
+    gemini_fallback_models: str = "gemini-3.1-flash-lite,gemini-3.5-flash"
+    # Model for LLM-as-judge scoring in evaluation; empty = same models as answering
+    gemini_judge_model: str = ""
     gemini_rpm: int = 10
     # Optional: 0 disables "thinking" on Gemini 2.5 models (faster, cheaper). None = model default.
     gemini_thinking_budget: int | None = None
@@ -37,6 +41,10 @@ class Settings(BaseSettings):
     prefetch_k: int = 50  # candidates per branch (dense / sparse) before fusion
     rerank_candidates: int = 20  # fused candidates scored by the cross-encoder (CPU cost ~linear)
     final_k: int = 8
+
+    @property
+    def fallback_models(self) -> list[str]:
+        return [m.strip() for m in self.gemini_fallback_models.split(",") if m.strip()]
 
     @property
     def pdf_dir(self) -> Path:

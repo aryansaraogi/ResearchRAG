@@ -25,7 +25,8 @@ class GenerateDatasetRequest(BaseModel):
 
 class RunRequest(BaseModel):
     configs: list[str] | None = None  # default: all
-    gen_configs: list[str] = ["hybrid_rrf_rerank"]  # LLM-judged generation (slow on free tier)
+    gen_configs: list[str] = ["hybrid_rrf"]  # LLM-judged generation (slow on free tier)
+    # Caps single-passage questions; multi-passage and unanswerable ones are always judged
     max_gen_questions: int | None = Field(default=20, ge=1)
 
 

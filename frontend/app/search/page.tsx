@@ -111,7 +111,7 @@ export default function SearchPage() {
   const [submitted, setSubmitted] = useState("");
   const [filters, setFilters] = useState<SearchFilters>({});
   const [mode, setMode] = useState<RetrievalMode>("hybrid");
-  const [rerank, setRerank] = useState(true);
+  const [rerank, setRerank] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
   const [results, setResults] = useState<RetrievedChunk[] | null>(null);
   const [loading, setLoading] = useState(false);

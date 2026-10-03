@@ -68,6 +68,10 @@ export interface RAGAnswer {
   answer: string;
   citations: Citation[];
   sources: RetrievedChunk[];
+  /** What retrieval searched for, when a follow-up was rewritten into a standalone question */
+  query?: string | null;
+  /** The Gemini model that wrote the answer (may be a fallback) */
+  model?: string | null;
 }
 
 export interface Facets {
@@ -84,6 +88,7 @@ export interface Health {
   qdrant_mode: "server" | "embedded";
   llm_configured: boolean;
   llm_model: string;
+  llm_fallbacks?: string[];
 }
 
 export interface EvalItem {
@@ -215,6 +220,7 @@ export interface ChatRequest {
 }
 
 export interface StreamHandlers {
+  onQuery?: (query: string) => void;
   onSources: (sources: RetrievedChunk[]) => void;
   onToken: (token: string) => void;
   onDone: (answer: RAGAnswer) => void;
@@ -257,7 +263,8 @@ export async function streamChat(req: ChatRequest, h: StreamHandlers, signal?: A
       }
       if (!data.length) continue; // keep-alive comments
       const payload = JSON.parse(data.join("\n"));
-      if (event === "sources") h.onSources(payload);
+      if (event === "query") h.onQuery?.(payload);
+      else if (event === "sources") h.onSources(payload);
       else if (event === "token") h.onToken(payload);
       else if (event === "done") h.onDone(payload);
       else if (event === "error") h.onError(payload);

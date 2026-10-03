@@ -25,6 +25,8 @@ class EvalItem(BaseModel):
     paper_id: str
     section: str = ""
     source: str = "synthetic"  # synthetic | manual
+    # False for questions the library cannot answer: the right response is a refusal (no gold chunks)
+    answerable: bool = True
 
 
 class _GenQA(BaseModel):

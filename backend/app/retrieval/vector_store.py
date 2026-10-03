@@ -115,6 +115,13 @@ def delete_paper(paper_id: str) -> None:
     )
 
 
+def get_chunks(ids: list[str]) -> list[models.Record]:
+    """Fetch chunk payloads by id; ids that do not exist are skipped."""
+    if not ids:
+        return []
+    return client().retrieve(collection_name(), ids=ids, with_payload=True, with_vectors=False)
+
+
 def scroll_chunks(paper_ids: list[str] | None = None, limit: int = 10_000) -> list[models.Record]:
     flt = None
     if paper_ids:

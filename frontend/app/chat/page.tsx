@@ -40,6 +40,10 @@ interface Turn {
   citations?: Citation[];
   streaming?: boolean;
   error?: string;
+  /** Standalone question retrieval used, when this was a rewritten follow-up */
+  query?: string;
+  /** Gemini model that wrote the answer */
+  model?: string;
 }
 
 const SUGGESTIONS = [
@@ -195,6 +199,7 @@ function AssistantTurn({
   selected,
   isLast,
   busy,
+  primaryModel,
   activeSource,
   onCite,
   onClearSource,
@@ -205,6 +210,7 @@ function AssistantTurn({
   selected: boolean;
   isLast: boolean;
   busy: boolean;
+  primaryModel?: string;
   activeSource: number | null;
   onCite: (n: number) => void;
   onClearSource: () => void;
@@ -224,7 +230,15 @@ function AssistantTurn({
         {turn.sources === undefined && turn.streaming
           ? "Searching your papers…"
           : `${sources.length} passages retrieved${turn.citations ? ` · ${turn.citations.length} cited` : ""}`}
+        {turn.model && primaryModel && turn.model !== primaryModel && (
+          <span title={`${primaryModel} was unavailable, so a fallback model answered`}>· answered by {turn.model}</span>
+        )}
       </div>
+      {turn.query && (
+        <p className="text-xs text-ink-3" title="Follow-ups are rewritten into a standalone question before searching">
+          Searched for: <span className="italic text-ink-2">{turn.query}</span>
+        </p>
+      )}
       {waiting && turn.sources !== undefined && <p className="caret text-sm text-ink-3">Reading sources</p>}
       {!!turn.content && (
         <div className={turn.streaming ? "streaming" : ""}>
@@ -294,7 +308,7 @@ export default function ChatPage() {
   const [input, setInput] = useState("");
   const [filters, setFilters] = useState<SearchFilters>({});
   const [mode, setMode] = useState<RetrievalMode>("hybrid");
-  const [rerank, setRerank] = useState(true);
+  const [rerank, setRerank] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [selectedTurn, setSelectedTurn] = useState<number | null>(null);
   const [activeSource, setActiveSource] = useState<number | null>(null);
@@ -360,9 +374,17 @@ export default function ChatPage() {
       await streamChat(
         { question, history, filters, mode, rerank },
         {
+          onQuery: (query) => patch(bot.id, { query }),
           onSources: (sources) => patch(bot.id, { sources }),
           onToken: (tok) => patch(bot.id, (t) => ({ content: t.content + tok })),
-          onDone: (a) => patch(bot.id, { content: a.answer, citations: a.citations, sources: a.sources }),
+          onDone: (a) =>
+            patch(bot.id, {
+              content: a.answer,
+              citations: a.citations,
+              sources: a.sources,
+              query: a.query ?? undefined,
+              model: a.model ?? undefined,
+            }),
           onError: (message) => patch(bot.id, { error: message }),
         },
         controller.signal,
@@ -490,6 +512,7 @@ export default function ChatPage() {
                     selected={selected?.id === t.id}
                     isLast={t.id === lastAssistant?.id}
                     busy={busy}
+                    primaryModel={health?.llm_model}
                     activeSource={activeSource}
                     onCite={cite(t.id)}
                     onClearSource={() => setActiveSource(null)}

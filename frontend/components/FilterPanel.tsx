@@ -89,6 +89,7 @@ export function RetrievalSettings({
         <input type="checkbox" checked={rerank} onChange={(e) => onRerank(e.target.checked)} className="accent-[var(--accent)]" />
         Cross-encoder rerank
       </label>
+      <p className="text-xs text-ink-3">Slower (~4 s). Helps most on keyword-style queries.</p>
     </Group>
   );
 }
