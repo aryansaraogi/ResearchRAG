@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { BookOpen, FlaskConical, MessageSquareText, Search } from "lucide-react";
+import { BookOpen, Columns3, FlaskConical, MessageSquareText, Search } from "lucide-react";
 import { api, type Health } from "@/lib/api";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
@@ -11,6 +11,7 @@ const LINKS = [
   { href: "/", label: "Library", icon: BookOpen },
   { href: "/search", label: "Search", icon: Search },
   { href: "/chat", label: "Ask", icon: MessageSquareText },
+  { href: "/compare", label: "Compare", icon: Columns3 },
   { href: "/eval", label: "Evaluation", icon: FlaskConical },
 ];
 
@@ -66,7 +67,7 @@ export function Nav() {
                 }`}
               >
                 <Icon size={16} />
-                <span className="hidden sm:inline">{label}</span>
+                <span className="hidden md:inline">{label}</span>
               </Link>
             );
           })}
@@ -76,7 +77,7 @@ export function Nav() {
               health?.llm_configured && health.llm_fallbacks?.length ? `\nFallbacks: ${health.llm_fallbacks.join(", ")}` : ""
             }`}>
             <span className={`h-2 w-2 shrink-0 rounded-full ${ok ? (health?.llm_configured ? "bg-good" : "bg-warning") : "bg-critical"}`} />
-            <span className="sr-only md:not-sr-only">{status}</span>
+            <span className="sr-only lg:not-sr-only">{status}</span>
           </div>
           <ThemeToggle />
         </div>

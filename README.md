@@ -12,6 +12,11 @@ ResearchRAG is a full-stack retrieval-augmented generation (RAG) platform for re
   - a question about several things ("how do the Adam settings for BERT and the Transformer differ?") is split into one sub-query per part, each searched separately, with the results fused;
   - the UI shows what was searched.
 - **Citation-aware generation:** Gemini answers only from numbered sources and cites every claim. Citation markers are checked against the retrieved sources and mapped back to the paper, section and page. The UI opens the PDF at the cited page.
+- **Research tools:**
+  - **Paper summaries:** at import, each paper gets a TL;DR, key contributions and limitations. Each point is labelled with the section it came from.
+  - **Compare papers:** a side-by-side table (problem, method, data, results, limitations, or your own aspects) built only from each paper's passages. It has clickable citations and exports to Markdown.
+  - **Citation graph:** shows which papers in your library cite each other, matched from their reference lists, with no LLM calls.
+  - **BibTeX export:** for one paper, the whole library, a comparison, or the papers an answer cites. arXiv papers include their eprint fields.
 - **Automated evaluation:**
   - synthetic question sets with gold passages, plus hand-written multi-paper and unanswerable questions;
   - IR metrics (Hit@k, Recall@k, MRR, nDCG) compared across four retrieval configs;
@@ -180,6 +185,28 @@ For multi-paper questions, MRR uses the first gold passage found.
 - **Latency** varied with machine load between runs. Hybrid took 0.08–0.23 s per query on a 4-core CPU, and the reranker added 4–10 s.
 - **Noise.** One question moves MRR by up to 0.036 on 28 questions, 0.014 on 72, and 0.17 on 6, so read the multi-paper column as directional.
 
+**Query planning: Hybrid vs Hybrid + sub-queries** (same 80 questions)
+
+| Config | Hit@1 | Recall@5 | Recall@10 | MRR | nDCG@10 | Latency |
+|---|---|---|---|---|---|---|
+| Hybrid (RRF) | 0.653 | 0.917 | 0.944 | 0.759 | 0.800 | 0.1 s |
+| Hybrid + sub-queries | 0.653 | **0.924** | **0.972** | **0.771** | **0.820** | 1.9 s |
+
+| MRR by type | Hand-written (28) | Gemini-written (38) | Multi-paper (6) |
+|---|---|---|---|
+| Hybrid (RRF) | 0.842 | 0.732 | 0.542 |
+| Hybrid + sub-queries | 0.842 (none split) | 0.761 (reworded, none split) | 0.500 (3 split) |
+
+- **The first planner over-split.** It split 16 of the 28 hand-written single-passage questions, ones like "What GPUs… and how long…" whose answer sits in one passage. Their MRR fell from 0.842 to 0.763.
+- **Explicit examples fixed it.** A prompt with one example of each case (several facts about one model stay one query; different papers get split) brought single-passage questions back to identical retrieval. Multi-paper questions still got both needed passages for 4 of 6, up from 2 of 6 (checked offline on the saved plans).
+- **Net effect:** splitting is safe for single-passage questions and raises Recall@10 from 0.944 to 0.972, at about 1.8 s per planned question.
+- **Multi-paper MRR is noise-dominated.** The planner isn't fully deterministic: this run split 3 of 6 multi-paper questions, and on 6 questions one question moves MRR by 0.17.
+- **Answer quality was a draw.** Both configs answered all 8 unanswerable questions with a refusal and had no false refusals, and correctness was 0.99 for both.
+- **Model fallback mid-run.** `gemini-3.5-flash-lite` used up its free daily quota at question 25, and the fallback chain finished the remaining 18 judged questions with `gemini-3.1-flash-lite`. That happened at the same question in both configs, so the comparison stays paired, but absolute answer scores here mix two models and aren't comparable with the earlier answer-quality table.
+- **Measured judge noise.** The hand-written questions got identical retrieval in both configs, yet their citation precision differed by 0.06. That is the run-to-run noise of LLM answering and judging, so treat answer-metric gaps of that size as noise.
+
+Ask uses the planner by default (Search runs the query exactly as typed). A simple first question skips it entirely, so it adds no call or latency there.
+
 The hand-written questions (single-passage, multi-paper and unanswerable) are in `backend/app/evaluation/manual_questions.jsonl`. To reproduce, copy them to `backend/data/eval/dataset.jsonl` and run `eval_cli.py run --gen hybrid_rrf hybrid_rrf_rerank --max-gen 28 --save`. Chunk IDs are deterministic, so the gold labels match as long as the same PDF versions are indexed. A newly generated Gemini set will contain different questions.
 
 **Caveats.**
@@ -204,6 +231,15 @@ The hand-written questions (single-passage, multi-paper and unanswerable) are in
   When there is history, or when the question contains words like "and", "compare" or "differ", one structured Gemini call returns 1–3 self-contained queries. A simple first question skips the call. Each query is searched, and the result lists are fused with reciprocal rank fusion, so each part gets passages. If planning fails, the question is searched as asked.
 - **Model fallback.** `GEMINI_FALLBACK_MODELS` lists models to try when the main one returns 503 (overloaded), 429 or 404. A failing model is skipped for a cooldown (1 minute, or 1 hour for a used-up daily quota), and the UI notes when a fallback wrote the answer.
 - **Citations.** The model sees sources as `[n] Title — §Section, p. X`. After generation, out-of-range markers are stripped and the rest are resolved to chunk, paper, section and page.
+- **Summaries.** One Gemini call per paper, made after the paper is already searchable, so a slow or failed call never holds up indexing.
+  - It reads the abstract, conclusion, discussion and any limitations section first, then the introduction, up to about 3,500 words.
+  - Section labels the model returns are checked against the passages it was given, so a point can't claim a section that doesn't exist.
+  - Papers imported earlier get a "Summarize" button.
+- **Comparison.** For each paper and aspect, hybrid search runs restricted to that paper, and the top passages are merged and numbered. One Gemini call then fills every aspect for that paper with cited sentences, or says the passages don't cover it. Cells can only cite their own paper's passages.
+- **Citation graph.**
+  - The parser already isolates each References section, so the list is saved at import under `data/refs/`. Older papers are parsed once, on first use.
+  - Paper A cites library paper B when A's reference list contains B's arXiv ID or B's normalised title. Hyphens and line breaks are folded first, and titles shorter than four words are skipped as too generic.
+  - Nodes are laid out by year, so arrows point back in time. A table view lists the same links.
 - **Free-tier friendly.** A client-side limiter spaces Gemini calls to `GEMINI_RPM`, and 429 and 5xx responses are retried with exponential backoff.
 
 ## Project layout
@@ -211,17 +247,17 @@ The hand-written questions (single-passage, multi-paper and unanswerable) are in
 ```
 backend/
   app/
-    ingestion/    pdf_parser, chunker, arxiv_client, pipeline
-    retrieval/    embeddings, vector_store, filters, hybrid, reranker
-    generation/   llm (Gemini), prompts, citations, rag
+    ingestion/    pdf_parser, chunker, arxiv_client, pipeline, references (citation graph)
+    retrieval/    embeddings, vector_store, filters, hybrid (incl. multi-query fusion), reranker
+    generation/   llm (Gemini, fallback chain), prompts, citations, rag, summaries, compare
     evaluation/   dataset, retrieval_metrics, generation_metrics, citation_metrics, runner
-    api/          papers, search, chat (SSE), eval
+    api/          papers, search, chat (SSE), compare, eval
   scripts/eval_cli.py
-  tests/          parser/chunker, filters, metrics, citation parsing
+  tests/          parser/chunker, filters, metrics, citations, LLM client, query planning, summaries, graph, compare
 frontend/
-  app/            / (library), /search, /chat, /eval
-  components/     FilterPanel, AnswerMarkdown (citation chips), Nav, ui
-  lib/api.ts      typed API client and SSE reader
+  app/            / (library + citation graph), /search, /chat, /compare, /eval
+  components/     FilterPanel, AnswerMarkdown (citation chips), CitationGraph, PdfViewer, Nav, ui
+  lib/            api.ts (typed client, SSE reader), bibtex.ts, storage.ts
 ```
 
 Run the tests with `cd backend && uv run pytest`.

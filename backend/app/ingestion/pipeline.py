@@ -15,7 +15,10 @@ from app.config import get_settings
 from app.db import engine
 from app.ingestion import arxiv_client
 from app.ingestion.chunker import chunk_document
+from app.generation.llm import LLMNotConfigured, get_llm
+from app.generation.summaries import Passage, summarize
 from app.ingestion.pdf_parser import parse_pdf
+from app.ingestion.references import save_references
 from app.models import Paper
 from app.retrieval import vector_store
 
@@ -73,8 +76,10 @@ def _ingest(paper_id: str) -> None:
         session.add(paper)
         session.commit()
 
+        chunks = []
         try:
             doc = parse_pdf(paper.pdf_path)
+            save_references(paper.id, doc)
             if paper.source == "upload":
                 enrich_from_arxiv(paper)
                 if not paper.title or paper.title == Path(paper.pdf_path).stem:
@@ -106,6 +111,23 @@ def _ingest(paper_id: str) -> None:
             paper.error = str(e)[:500]
         session.add(paper)
         session.commit()
+
+        # Summarize after the paper is already searchable, so a slow or failed Gemini call never holds it up
+        if paper.status == "ready":
+            paper.summary = try_summary(paper.title, [Passage(c.section, c.section_type, c.page_start, c.text)
+                                                      for c in chunks])
+            session.add(paper)
+            session.commit()
+
+
+def try_summary(title: str, passages: list[Passage]) -> dict | None:
+    try:
+        return summarize(get_llm(), title, passages)
+    except LLMNotConfigured:
+        return None
+    except Exception as e:  # noqa: BLE001 - the paper stays usable without a summary
+        log.warning("Summary failed for %s: %s", title, e)
+        return None
 
 
 def register_arxiv(session: Session, meta: arxiv_client.ArxivPaper) -> Paper:

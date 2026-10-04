@@ -9,6 +9,7 @@ import {
   Copy,
   FileText,
   MessageSquareText,
+  Quote,
   RefreshCw,
   RotateCcw,
   SlidersHorizontal,
@@ -25,6 +26,7 @@ import {
   type RetrievedChunk,
   type SearchFilters,
 } from "@/lib/api";
+import { toBibtex } from "@/lib/bibtex";
 import { readJSON, writeJSON } from "@/lib/storage";
 import { AnswerMarkdown } from "@/components/AnswerMarkdown";
 import { FilterPanel, RetrievalSettings, activeFilterCount, useFacets } from "@/components/FilterPanel";
@@ -206,6 +208,7 @@ function AssistantTurn({
   onCite,
   onClearSource,
   onCopy,
+  onBibtex,
   onRegenerate,
 }: {
   turn: Turn;
@@ -217,6 +220,7 @@ function AssistantTurn({
   onCite: (n: number) => void;
   onClearSource: () => void;
   onCopy: () => void;
+  onBibtex: () => void;
   onRegenerate: () => void;
 }) {
   const sources = turn.sources ?? [];
@@ -274,6 +278,11 @@ function AssistantTurn({
           {turn.content && !turn.error && (
             <Button variant="ghost" className="px-2! py-1! text-xs" onClick={onCopy}>
               <Copy size={13} /> Copy
+            </Button>
+          )}
+          {!!turn.citations?.length && (
+            <Button variant="ghost" className="px-2! py-1! text-xs" onClick={onBibtex} title="Copy BibTeX for the cited papers">
+              <Quote size={13} /> BibTeX
             </Button>
           )}
           {isLast && (
@@ -427,6 +436,21 @@ export default function ChatPage() {
     }
   };
 
+  const bibtex = async (turn: Turn) => {
+    const cited = new Set(turn.citations?.map((c) => c.number));
+    const papers = new Map(
+      (turn.sources ?? [])
+        .filter((_, i) => cited.has(i + 1))
+        .map((s) => [s.paper_id, { id: s.paper_id, title: s.title, authors: s.authors, year: s.year }]),
+    );
+    try {
+      await navigator.clipboard.writeText(toBibtex([...papers.values()]));
+      toast(`BibTeX copied for ${papers.size} paper${papers.size === 1 ? "" : "s"}`, "good");
+    } catch {
+      toast("Couldn't copy to the clipboard", "critical");
+    }
+  };
+
   const cite = (turnId: number) => (n: number) => {
     setSelectedTurn(turnId);
     setActiveSource((cur) => (cur === n && selected?.id === turnId ? null : n));
@@ -529,6 +553,7 @@ export default function ChatPage() {
                     onCite={cite(t.id)}
                     onClearSource={() => setActiveSource(null)}
                     onCopy={() => copy(t)}
+                    onBibtex={() => bibtex(t)}
                     onRegenerate={() => regenerate(t.id)}
                   />
                 ),

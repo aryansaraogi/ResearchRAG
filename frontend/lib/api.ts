@@ -16,6 +16,47 @@ export interface Paper {
   status: PaperStatus;
   error: string | null;
   created_at: string;
+  /** Made at import by one grounded Gemini call; null if it failed or the paper predates summaries */
+  summary?: PaperSummary | null;
+}
+
+export interface SummaryPoint {
+  text: string;
+  /** Heading of the passage the point comes from (empty if the model named an unknown section) */
+  section: string;
+}
+
+export interface PaperSummary {
+  tldr: string;
+  contributions: SummaryPoint[];
+  limitations: SummaryPoint[];
+  model?: string | null;
+}
+
+export interface CitationGraph {
+  nodes: { id: string; title: string; year: number | null; authors: string[]; n_references: number }[];
+  /** source cites target */
+  edges: { source: string; target: string }[];
+}
+
+export interface CompareCell {
+  text: string;
+  citations: Citation[];
+}
+
+export interface CompareColumn {
+  paper_id: string;
+  title: string;
+  year: number | null;
+  cells: Record<string, CompareCell>;
+  /** Numbered passages the cells cite, from this paper only */
+  sources: RetrievedChunk[];
+  model?: string | null;
+}
+
+export interface CompareResult {
+  aspects: string[];
+  papers: CompareColumn[];
 }
 
 export interface ArxivResult {
@@ -194,6 +235,10 @@ export const api = {
   facets: () => request<Facets>("/papers/facets"),
   deletePaper: (id: string) => request<void>(`/papers/${encodeURIComponent(id)}`, { method: "DELETE" }),
   reingest: (id: string) => post<Paper>(`/papers/${encodeURIComponent(id)}/reingest`, {}),
+  summarize: (id: string) => post<Paper>(`/papers/${encodeURIComponent(id)}/summary`, {}),
+  graph: () => request<CitationGraph>("/papers/graph"),
+  compareAspects: () => request<Record<string, string>>("/compare/aspects"),
+  compare: (body: { paper_ids: string[]; aspects?: string[] }) => post<CompareResult>("/compare", body),
   importArxiv: (ids: string[]) => post<Paper[]>("/papers/arxiv", { ids }),
   searchArxiv: (q: string) => request<ArxivResult[]>(`/papers/arxiv/search?q=${encodeURIComponent(q)}&max_results=10`),
   upload: (files: File[]) => {

@@ -23,6 +23,8 @@ class Paper(SQLModel, table=True):
     status: str = "pending"  # pending | processing | ready | failed
     error: str | None = None
     created_at: datetime = Field(default_factory=_now)
+    # Generated at import: {tldr, contributions: [{text, section}], limitations: [...], model}
+    summary: dict | None = Field(default=None, sa_column=Column(JSON))
 
 
 class EvalRun(SQLModel, table=True):

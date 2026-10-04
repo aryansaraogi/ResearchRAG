@@ -7,8 +7,11 @@ from sqlmodel import Session, select
 
 from app.config import get_settings
 from app.db import get_session
+from app.generation.llm import LLMNotConfigured, describe_error, get_llm
+from app.generation.summaries import Passage, summarize
 from app.ingestion import arxiv_client
 from app.ingestion.pipeline import file_paper_id, ingest, register_arxiv
+from app.ingestion.references import citation_graph, refs_path
 from app.models import Paper
 from app.retrieval import vector_store
 
@@ -41,6 +44,13 @@ def facets(session: Session = Depends(get_session)):
         "papers": [{"id": p.id, "title": p.title} for p in papers],
         "section_types": SECTION_TYPES,
     }
+
+
+@router.get("/graph")
+def graph(session: Session = Depends(get_session)):
+    """Citations between indexed papers, matched from each paper's reference list (no LLM calls)."""
+    papers = session.exec(select(Paper).where(Paper.status == "ready")).all()
+    return citation_graph(list(papers))
 
 
 @router.get("/arxiv/search")
@@ -129,6 +139,29 @@ def reingest(paper_id: str, background: BackgroundTasks, session: Session = Depe
     return paper
 
 
+@router.post("/{paper_id}/summary", response_model=Paper)
+def make_summary(paper_id: str, session: Session = Depends(get_session)):
+    """(Re)generate the TL;DR, contributions and limitations from the indexed chunks."""
+    paper = session.get(Paper, paper_id)
+    if not paper:
+        raise HTTPException(404, "Paper not found")
+    if paper.status != "ready":
+        raise HTTPException(409, "The paper is still being indexed")
+    records = sorted(vector_store.scroll_chunks([paper_id]), key=lambda r: r.payload["chunk_index"])
+    passages = [Passage(r.payload["section"], r.payload["section_type"], r.payload["page_start"], r.payload["text"])
+                for r in records]
+    try:
+        paper.summary = summarize(get_llm(), paper.title, passages)
+    except LLMNotConfigured as e:
+        raise HTTPException(503, str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, describe_error(e)) from e
+    session.add(paper)
+    session.commit()
+    session.refresh(paper)
+    return paper
+
+
 @router.delete("/{paper_id}", status_code=204)
 def delete_paper(paper_id: str, session: Session = Depends(get_session)):
     paper = session.get(Paper, paper_id)
@@ -139,5 +172,6 @@ def delete_paper(paper_id: str, session: Session = Depends(get_session)):
     except Exception:  # noqa: BLE001 - collection may not exist yet
         pass
     Path(paper.pdf_path).unlink(missing_ok=True)
+    refs_path(paper_id).unlink(missing_ok=True)
     session.delete(paper)
     session.commit()
