@@ -25,6 +25,14 @@ ResearchRAG is a full-stack retrieval-augmented generation (RAG) platform for re
 
 ## Architecture
 
+### System overview
+
+[![ResearchRAG architecture. The Next.js pages (Library, Search, Ask, Compare, Evaluation) call the FastAPI routers. The paper API stores metadata in SQLite and starts the ingestion pipeline, which fetches, parses, chunks, summarizes and extracts references. The search and chat APIs use query planning and hybrid retrieval over Qdrant, with an optional reranker, and Gemini writes cited answers. The comparison and evaluation APIs build on the same retrieval.](docs/architecture.png)](docs/architecture.png)
+
+*Diagram generated with GitDiagram. Click it to open the full-size image.*
+
+### Query pipeline
+
 ```mermaid
 flowchart LR
   subgraph Ingestion
