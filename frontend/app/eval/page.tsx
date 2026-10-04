@@ -21,7 +21,8 @@ const cfgColor = (c: string) => CONFIGS[c]?.color ?? "var(--text-3)";
 const sortConfigs = (cs: string[]) =>
   [...cs].sort((a, b) => (CONFIG_ORDER.indexOf(a) + 1 || 99) - (CONFIG_ORDER.indexOf(b) + 1 || 99));
 
-const RETRIEVAL_METRICS: [key: string, label: string][] = [
+const ADJ_HINT = "Also counts the neighbouring chunk in the same section as a hit (chunks overlap ~15%)";
+const RETRIEVAL_METRICS: [key: string, label: string, hint?: string][] = [
   ["mrr", "MRR"],
   ["hit@1", "Hit@1"],
   ["hit@3", "Hit@3"],
@@ -31,6 +32,8 @@ const RETRIEVAL_METRICS: [key: string, label: string][] = [
   ["recall@10", "Recall@10"],
   ["ndcg@10", "nDCG@10"],
   ["precision@5", "P@5"],
+  ["mrr_adj", "MRR ±1", ADJ_HINT],
+  ["hit@1_adj", "Hit@1 ±1", ADJ_HINT],
 ];
 const CHART_METRICS = ["mrr", "hit@1", "hit@5", "recall@10", "ndcg@10"];
 const GEN_METRICS: [key: string, label: string, hint: string][] = [
@@ -41,7 +44,11 @@ const GEN_METRICS: [key: string, label: string, hint: string][] = [
   ["citation_precision", "Cite prec.", "Citations that actually support their sentence"],
   ["citation_coverage", "Cite cover.", "Sentences that carry a supporting citation"],
   ["gold_cited", "Gold cited", "Answer cites the passage the question was written from"],
+  ["refusal_accuracy", "Refuses", "Unanswerable questions answered with a refusal (higher is better)"],
+  ["false_refusal_rate", "False refusals", "Answerable questions wrongly refused (lower is better)"],
 ];
+
+const LOWER_IS_BETTER = new Set(["false_refusal_rate", "latency_ms"]);
 
 const fmt = (v: number | undefined | null, digits = 3) => (v == null ? "—" : v.toFixed(digits));
 
@@ -82,8 +89,10 @@ function DatasetCard({
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const running = status?.state === "running";
-  const papers = new Set(items?.map((i) => i.paper_id)).size;
+  const papers = new Set(items?.flatMap((i) => i.paper_id.split("+")).filter(Boolean)).size;
   const manual = items?.filter((i) => i.source === "manual").length ?? 0;
+  const unanswerable = items?.filter((i) => i.answerable === false).length ?? 0;
+  const multi = items?.filter((i) => i.gold_chunk_ids.length > 1).length ?? 0;
 
   const generate = async () => {
     setError(null);
@@ -104,6 +113,8 @@ function DatasetCard({
       <div className="text-xs text-ink-3">
         {items?.length ? `questions across ${papers} paper${papers === 1 ? "" : "s"}` : "questions, none generated yet"}
         {manual > 0 && ` · ${manual} hand-written`}
+        {multi > 0 && ` · ${multi} multi-paper`}
+        {unanswerable > 0 && ` · ${unanswerable} unanswerable`}
       </div>
 
       <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -183,23 +194,27 @@ function DatasetCard({
 function NewRunCard({
   available,
   datasetSize,
+  counts,
   llmReady,
   onStart,
 }: {
   available: string[];
   datasetSize: number;
+  counts: { singles: number; multi: number; unanswerable: number };
   llmReady: boolean;
   onStart: (configs: string[], genConfigs: string[], maxGen: number | null) => Promise<void>;
 }) {
   const [configs, setConfigs] = useState<string[] | null>(null);
-  const [genConfigs, setGenConfigs] = useState<string[]>(["hybrid_rrf_rerank"]);
+  const [genConfigs, setGenConfigs] = useState<string[]>(["hybrid_rrf"]);
   const [maxGen, setMaxGen] = useState<string>("20");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const chosen = configs ?? available;
   const gen = llmReady ? genConfigs.filter((c) => chosen.includes(c)) : [];
-  const nGen = maxGen ? Math.min(Number(maxGen), datasetSize) : datasetSize;
+  // Multi-paper and unanswerable questions are always judged; the cap applies to single-passage ones
+  const judged = (maxGen ? Math.min(Number(maxGen), counts.singles) : counts.singles) + counts.multi;
+  const calls = gen.length * (judged * 2 + counts.unanswerable);
   const toggle = (list: string[], c: string) => (list.includes(c) ? list.filter((x) => x !== c) : [...list, c]);
 
   const start = async () => {
@@ -273,7 +288,7 @@ function NewRunCard({
             aria-label="Questions to judge"
             disabled={!gen.length}
           />
-          questions
+          single-passage questions
         </label>
         <Button className="ml-auto" onClick={start} loading={busy} disabled={!datasetSize || !chosen.length}>
           <Play size={13} /> Start run
@@ -283,7 +298,7 @@ function NewRunCard({
         {!datasetSize
           ? "Generate a question set first."
           : gen.length
-            ? `≈ ${nGen * gen.length * 2} Gemini calls (answer + judge per question and config).`
+            ? `≈ ${calls} Gemini calls. Multi-paper and unanswerable questions are always judged.`
             : llmReady
               ? "Retrieval only: no Gemini calls."
               : "No Gemini key: retrieval metrics only."}
@@ -327,7 +342,7 @@ function ChartTooltip({ active, payload, label }: TooltipContentProps) {
 }
 
 function RetrievalChart({ run, configs }: { run: EvalRun; configs: string[] }) {
-  const label = Object.fromEntries(RETRIEVAL_METRICS);
+  const label = Object.fromEntries(RETRIEVAL_METRICS.map(([k, l]) => [k, l]));
   const data = CHART_METRICS.map((m) => ({
     metric: label[m],
     ...Object.fromEntries(configs.map((c) => [c, run.results[c]?.[m] ?? 0])),
@@ -377,7 +392,12 @@ function MetricTable({
   extra?: { label: string; value: (c: string) => string; best?: (c: string) => boolean };
 }) {
   const best = Object.fromEntries(
-    metrics.map(([k]) => [k, Math.max(...configs.map((c) => results[c]?.[k] ?? -Infinity))]),
+    metrics.map(([k]) => [
+      k,
+      LOWER_IS_BETTER.has(k)
+        ? Math.min(...configs.map((c) => results[c]?.[k] ?? Infinity))
+        : Math.max(...configs.map((c) => results[c]?.[k] ?? -Infinity)),
+    ]),
   );
   return (
     <div className="overflow-x-auto">
@@ -485,7 +505,11 @@ function QuestionRow({
             <ChevronDown size={14} className={`mt-0.5 shrink-0 text-ink-3 transition ${open ? "" : "-rotate-90"}`} />
             <div className="min-w-0">
               <div className="leading-snug">{row.question}</div>
-              <div className="mt-0.5 truncate text-xs text-ink-3">{paperTitle}</div>
+              <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-ink-3">
+                {row.answerable === false && <Badge tone="warning">unanswerable</Badge>}
+                {row.paper_id.includes("+") && <Badge tone="accent">multi-paper</Badge>}
+                <span className="truncate">{paperTitle}</span>
+              </div>
               {/* Phones: ranks sit under the question instead of in columns */}
               <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 sm:hidden">
                 {configs.map((c) => (
@@ -525,8 +549,13 @@ function QuestionRow({
                           <div className="text-ink-2">
                             <AnswerMarkdown text={e.generation.answer} sources={[]} onCite={() => {}} />
                           </div>
-                          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink-3">
-                            {GEN_METRICS.map(([k, label, hint]) => (
+                          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-3">
+                            {e.generation.refusal_accuracy !== undefined && (
+                              <Badge tone={e.generation.refusal_accuracy ? "good" : "critical"}>
+                                {e.generation.refusal_accuracy ? "Refused correctly" : "Answered instead of refusing"}
+                              </Badge>
+                            )}
+                            {GEN_METRICS.filter(([k]) => k !== "refusal_accuracy" && k in e.generation!).map(([k, label, hint]) => (
                               <span key={k} title={hint}>
                                 {label}{" "}
                                 <span className="font-semibold tabular-nums text-ink">
@@ -534,6 +563,12 @@ function QuestionRow({
                                 </span>
                               </span>
                             ))}
+                            {e.generation.model && (
+                              <span>
+                                answered by {e.generation.model}
+                                {e.generation.judge_model ? ` · judged by ${e.generation.judge_model}` : ""}
+                              </span>
+                            )}
                           </div>
                         </>
                       )}
@@ -553,8 +588,10 @@ function QuestionTable({ run, configs }: { run: EvalRun; configs: string[] }) {
   const facets = useFacets();
   const [missesOnly, setMissesOnly] = useState(false);
   const titles = Object.fromEntries(facets?.papers.map((p) => [p.id, p.title]) ?? []);
+  const paperLabel = (id: string) =>
+    id ? id.split("+").map((p) => titles[p] ?? p).join(" + ") : "Not covered by the library: should be refused";
   const rows = (run.details ?? []).filter(
-    (r) => !missesOnly || configs.some((c) => r.configs[c] && r.configs[c].gold_rank == null),
+    (r) => !missesOnly || configs.some((c) => r.configs[c]?.gold_rank === null),
   );
   return (
     <Card>
@@ -587,7 +624,7 @@ function QuestionTable({ run, configs }: { run: EvalRun; configs: string[] }) {
           </thead>
           <tbody>
             {rows.map((r) => (
-              <QuestionRow key={r.id} row={r} configs={configs} paperTitle={titles[r.paper_id] ?? r.paper_id} />
+              <QuestionRow key={r.id} row={r} configs={configs} paperTitle={paperLabel(r.paper_id)} />
             ))}
             {rows.length === 0 && (
               <tr>
@@ -606,6 +643,8 @@ function QuestionTable({ run, configs }: { run: EvalRun; configs: string[] }) {
 function RunResults({ run }: { run: EvalRun }) {
   const configs = sortConfigs(Object.keys(run.results));
   const genConfigs = configs.filter((c) => run.results[c]?.n_generation);
+  const unanswerableJudged = Math.max(0, ...genConfigs.map((c) => run.results[c]?.n_unanswerable ?? 0));
+  const answerableJudged = Math.max(0, ...genConfigs.map((c) => run.results[c]?.n_generation ?? 0)) - unanswerableJudged;
   const [view, setView] = useState<"chart" | "table">("chart");
 
   if (run.status === "running")
@@ -666,8 +705,8 @@ function RunResults({ run }: { run: EvalRun }) {
         <Card className="p-4">
           <h3 className="text-sm font-semibold">Answer quality</h3>
           <p className="mb-3 text-xs text-ink-3">
-            LLM-as-judge scores (1–5 rescaled to 0–1) and citation checks on the first{" "}
-            {Math.max(...genConfigs.map((c) => run.results[c]?.n_generation ?? 0))} questions. Hover a column for its
+            LLM-as-judge scores (1–5 rescaled to 0–1) and citation checks on {answerableJudged} answerable
+            {unanswerableJudged ? ` and ${unanswerableJudged} unanswerable` : ""} questions. Hover a column for its
             definition.
           </p>
           <MetricTable configs={genConfigs} results={run.results} metrics={GEN_METRICS} />
@@ -790,11 +829,21 @@ export default function EvalPage() {
 
       <div className="grid gap-4 md:grid-cols-2">
         <DatasetCard items={dataset} status={dsStatus} llmReady={llmReady} onGenerate={generate} />
-        <NewRunCard available={available} datasetSize={dataset?.length ?? 0} llmReady={llmReady} onStart={start} />
+        <NewRunCard
+          available={available}
+          datasetSize={dataset?.length ?? 0}
+          counts={{
+            singles: dataset?.filter((i) => i.answerable !== false && i.gold_chunk_ids.length === 1).length ?? 0,
+            multi: dataset?.filter((i) => i.gold_chunk_ids.length > 1).length ?? 0,
+            unanswerable: dataset?.filter((i) => i.answerable === false).length ?? 0,
+          }}
+          llmReady={llmReady}
+          onStart={start}
+        />
       </div>
 
       <div className="grid gap-5 lg:grid-cols-[220px_1fr]">
-        <aside className="space-y-2 lg:sticky lg:top-20 lg:self-start">
+        <aside className="min-w-0 space-y-2 lg:sticky lg:top-20 lg:self-start">
           <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-3">Runs</div>
           {runs?.length === 0 && <p className="text-xs text-ink-3">No runs yet.</p>}
           <ul className="flex gap-1.5 overflow-x-auto lg:max-h-[70dvh] lg:flex-col lg:overflow-y-auto">

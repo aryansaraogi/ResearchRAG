@@ -10,10 +10,10 @@ ResearchRAG is a full-stack retrieval-augmented generation (RAG) platform for re
 - **Conversational follow-ups:** a follow-up such as "what are its limitations?" is rewritten into a standalone question before retrieval, and the UI shows what was searched.
 - **Citation-aware generation:** Gemini answers only from numbered sources and cites every claim. Citation markers are checked against the retrieved sources and mapped back to the paper, section and page. The UI opens the PDF at the cited page.
 - **Automated evaluation:**
-  - synthetic question sets with gold passages;
+  - synthetic question sets with gold passages, plus hand-written multi-paper and unanswerable questions;
   - IR metrics (Hit@k, Recall@k, MRR, nDCG) compared across four retrieval configs;
   - LLM-as-judge scoring of faithfulness, answer relevance and correctness;
-  - per-claim citation precision and coverage.
+  - per-claim citation precision and coverage, refusal accuracy on unanswerable questions, and false refusals.
 
 ## Architecture
 
@@ -87,7 +87,9 @@ The evaluation answers two questions:
 1. Does each retrieval strategy find the right passage?
 2. Are the generated answers faithful, relevant and correctly cited?
 
-1. **Question set.** Gemini writes one self-contained question and a reference answer for each sampled chunk. Sampling is round-robin across papers, and front matter and appendices are skipped. The source chunk is the *gold* passage. Hand-written items with `"source": "manual"` can be appended to `backend/data/eval/dataset.jsonl`.
+1. **Question set.** Gemini writes one self-contained question and a reference answer for each sampled chunk. Sampling is round-robin across papers, and front matter and appendices are skipped. The source chunk is the *gold* passage. Hand-written items with `"source": "manual"` can be appended to `backend/data/eval/dataset.jsonl`. The hand-written set also covers two harder cases:
+   - **Multi-paper questions** need passages from two papers, and both are gold, so Recall@k shows whether retrieval found both.
+   - **Unanswerable questions** ask about topics none of the papers cover. The right answer is a refusal, so they have no gold passage (`"answerable": false`).
 2. **Retrieval metrics.** These are computed locally for four configs:
 
    | Config | Description |
@@ -97,7 +99,9 @@ The evaluation answers two questions:
    | `hybrid_rrf` | Dense + BM25, RRF |
    | `hybrid_rrf_rerank` | Hybrid, then cross-encoder |
 
-   Reported per config: Hit@{1,3,5,10}, Recall@{5,10}, MRR, nDCG@10, P@5 and mean latency.
+   Reported per config: Hit@{1,3,5,10}, Recall@{5,10}, MRR, nDCG@10, P@5 and mean latency. Unanswerable questions have no gold passage and are left out.
+
+   **MRR ±1 and Hit@{1,5} ±1** also accept the neighbouring chunk from the same section. Chunks overlap by 15%, so a neighbour often holds the answer, but the strict metrics count it as a miss.
 3. **Generation and citation metrics.** These use one judge call per answer to stay inside free-tier quotas:
 
    | Metric | Meaning |
@@ -109,8 +113,14 @@ The evaluation answers two questions:
    | citation_precision | Share of (sentence, cited source) pairs where that source actually supports the sentence |
    | citation_coverage | Share of answer sentences that carry a citation |
    | gold_cited | Whether the answer cites the gold passage, when that passage was retrieved |
+   | refusal_accuracy | Share of unanswerable questions answered with a refusal |
+   | false_refusal_rate | Share of answerable questions wrongly refused (lower is better) |
 
    Judge scores are 1–5, rescaled to 0–1.
+
+   - **Refusals.** A refusal is the prompt's exact not-found reply, or a short answer that only says the sources don't cover the question.
+   - **What gets judged.** Multi-paper and unanswerable questions are always judged; `--max-gen` caps the single-passage ones.
+   - **Judge model.** Set `GEMINI_JUDGE_MODEL` to judge with a different, ideally stronger, model than the one answering. Each judged answer records both models.
 
 Run the evaluation from the **Evaluation** page, or from the CLI. In embedded mode, stop the API first.
 
@@ -118,54 +128,60 @@ Run the evaluation from the **Evaluation** page, or from the CLI. In embedded mo
 cd backend
 uv run python scripts/eval_cli.py generate --n 40
 uv run python scripts/eval_cli.py run                                  # retrieval, all configs
-uv run python scripts/eval_cli.py run --gen hybrid_rrf_rerank --max-gen 20 --out results.json
+uv run python scripts/eval_cli.py run --gen hybrid_rrf hybrid_rrf_rerank --max-gen 28 --out results.json
 ```
 
 ### Results
 
-These results cover the four example papers (Transformer, BERT, DPR, RAG), split into 153 chunks, with 66 questions:
-- **28 hand-written**, 7 per paper. Each was written from one passage read directly from the chunked PDFs, not picked through search, so the gold labels don't favor any retriever.
-- **38 generated by Gemini** with the pipeline described above.
+These results cover five papers: the four classics (Transformer, BERT, DPR, RAG) plus *An Empirical Study of Model Context Protocol Applications*, uploaded as a PDF. Together they make 188 chunks. The question set has 80 questions:
+- **28 hand-written single-passage questions**, 7 per classic paper. Each was written from one passage read directly from the chunked PDFs, not picked through search, so the gold labels don't favor any retriever.
+- **38 Gemini-written questions** from the pipeline above.
+- **6 hand-written multi-paper questions** whose answer needs passages from two papers.
+- **8 hand-written unanswerable questions** about topics none of the papers cover. A BM25 search confirms their key terms don't occur in the corpus.
 
-Answers were generated and judged by `gemini-3.5-flash-lite`. Latency is the mean per query on a 4-core CPU.
+Answers were generated and judged by `gemini-3.5-flash-lite`.
 
-**Retrieval, all 66 questions**
+**Retrieval** (72 answerable questions)
 
-| Config | Hit@1 | Hit@5 | MRR | nDCG@10 | Latency |
+| Config | Hit@1 | Hit@5 | MRR | MRR ±1 | nDCG@10 |
 |---|---|---|---|---|---|
-| Dense | 0.636 | 0.864 | 0.729 | 0.766 | 59 ms |
-| BM25 | 0.667 | **0.970** | 0.799 | 0.846 | 13 ms |
-| Hybrid (RRF) | 0.667 | 0.955 | 0.781 | 0.831 | 76 ms |
-| Hybrid + rerank | **0.758** | 0.939 | **0.834** | **0.864** | 4.3 s |
+| Dense | 0.625 | 0.847 | 0.717 | 0.748 | 0.739 |
+| BM25 | 0.667 | **0.931** | 0.787 | 0.809 | 0.819 |
+| Hybrid (RRF) | 0.653 | **0.931** | 0.759 | 0.790 | 0.800 |
+| Hybrid + rerank | **0.722** | 0.903 | **0.803** | **0.823** | **0.825** |
 
-**MRR by question source**
+**MRR by question type**
 
-| Config | Hand-written (28) | Gemini-written (38) |
-|---|---|---|
-| Dense | 0.830 | 0.654 |
-| BM25 | 0.765 | 0.825 |
-| Hybrid (RRF) | **0.851** | 0.729 |
-| Hybrid + rerank | 0.808 | **0.852** |
+| Config | Hand-written (28) | Gemini-written (38) | Multi-paper (6) | Multi-paper: both passages in top 10 |
+|---|---|---|---|---|
+| Dense | 0.830 | 0.654 | **0.583** | 1/6 |
+| BM25 | 0.747 | 0.851 | 0.575 | 1/6 |
+| Hybrid (RRF) | **0.842** | 0.732 | 0.542 | **2/6** |
+| Hybrid + rerank | 0.808 | **0.852** | 0.472 | **2/6** |
 
-**Answer quality**, Hybrid + rerank, 28 hand-written questions:
+For multi-paper questions, MRR uses the first gold passage found.
 
-| Faithfulness | Answer relevance | Context relevance | Correctness | Citation precision | Citation coverage | Gold passage cited |
-|---|---|---|---|---|---|---|
-| 0.99 | 1.00 | 1.00 | 0.99 | 0.87 | 0.89 | 1.00 |
+**Answer quality** (34 answerable and 8 unanswerable questions per config)
 
-- **Overall winner.** Hybrid + rerank has the best Hit@1, MRR and nDCG@10. BM25 has the best Hit@5.
-- **The question source changes the winner.** Gemini's questions reuse the passage's wording, so BM25 beats dense by 0.17 MRR on them. The cross-encoder adds 0.12 on top of RRF there.
-- **Hand-written questions reverse it.** On these paraphrased questions dense beats BM25, RRF is best, and the reranker costs 0.04. The passages it promotes share the question's key terms but don't hold the answer. One example is an appendix that names "Thorough Decoding" without defining it. `ms-marco-MiniLM-L-6-v2` is a small web-search model, and a larger reranker such as `BAAI/bge-reranker-base` may do better.
-- **Which column to trust.** Users rarely know a paper's exact wording, so the hand-written column is the better guide to real queries. That's why both sets are kept.
-- **Judge scores sit near the ceiling.** Each question has a single-passage answer, and the judge is the same small model. The citation checks separate answers better: 13% of (sentence, citation) pairs cite a source that doesn't support the sentence, and 11% of sentences carry no citation.
-- **Noise.** One question moves MRR by up to 0.036 on 28 questions and up to 0.015 on 66, so treat small differences as noise.
+| Config | Faithfulness | Answer relevance | Correctness | Citation precision | Citation coverage | Unanswerable refused | False refusals |
+|---|---|---|---|---|---|---|---|
+| Hybrid (RRF) | 0.96 | 0.93 | 0.93 | **0.91** | **0.89** | 8/8 | 2/34 |
+| Hybrid + rerank | 0.96 | 0.94 | 0.92 | 0.86 | 0.80 | 8/8 | 1/34 |
 
-The hand-written questions are in `backend/app/evaluation/manual_questions.jsonl`. Copy them to `backend/data/eval/dataset.jsonl` and run the evaluation to reproduce that column. Chunk IDs are deterministic, so the gold labels match as long as the same PDF versions are indexed. A new Gemini-generated set will contain different questions.
+- **Question type decides the retrieval winner.** On the paraphrased hand-written questions, Hybrid is best (0.842 MRR) and the reranker costs 0.03. On Gemini's questions, which reuse the passage's wording, BM25 and Hybrid + rerank lead (0.85) and dense trails (0.65). Users rarely know a paper's exact wording, so Search and Ask default to Hybrid without the reranker.
+- **Multi-paper questions are the weak spot.** Even the best configs get both needed passages for only 2 of 6 questions. Answer correctness falls from 0.98–0.99 on the hand-written single-passage questions to 0.62–0.67. One query embedding tends to settle on one half of a two-part question, so splitting such questions into sub-queries is the natural next step.
+- **Refusals work.** All 8 unanswerable questions were refused under both setups. Every false refusal came on a multi-paper question. In the Hybrid run, neither gold passage was among the model's 8 sources, so refusing was the faithful response to what it was given.
+- **The reranker costs citation quality.** On the same questions it lowers citation precision from 0.91 to 0.86 and coverage from 0.89 to 0.80, at the same faithfulness.
+- **Neighbouring chunks.** Counting the same-section neighbour as a hit adds 0.02–0.03 MRR, so the strict single-label numbers slightly understate retrieval.
+- **Latency** varied with machine load between runs. Hybrid took 0.08–0.23 s per query on a 4-core CPU, and the reranker added 4–10 s.
+- **Noise.** One question moves MRR by up to 0.036 on 28 questions, 0.014 on 72, and 0.17 on 6, so read the multi-paper column as directional.
+
+The hand-written questions (single-passage, multi-paper and unanswerable) are in `backend/app/evaluation/manual_questions.jsonl`. To reproduce, copy them to `backend/data/eval/dataset.jsonl` and run `eval_cli.py run --gen hybrid_rrf hybrid_rrf_rerank --max-gen 28 --save`. Chunk IDs are deterministic, so the gold labels match as long as the same PDF versions are indexed. A newly generated Gemini set will contain different questions.
 
 **Caveats.**
-- Synthetic questions are written from a single chunk, so they tend to reuse its vocabulary, which favors lexical retrieval (measured above). The prompt asks for paraphrased, self-contained questions to reduce this, and a hand-written set is a useful check.
-- Only one gold chunk is labeled per question. Neighboring chunks that also answer it count as misses, which makes the retrieval numbers conservative.
-- The judge is the same model family as the generator. Treat absolute judge scores as relative comparisons.
+- Synthetic questions reuse their passage's vocabulary, which favors lexical retrieval (measured above). The prompt asks for paraphrased, self-contained questions to reduce this, and the hand-written set is a check on it.
+- The judge is the same small model that writes the answers. `GEMINI_JUDGE_MODEL` can point at a stronger model, but on the free tier full Flash models allow only about 20 requests a day, too few for a full run.
+- The refusal check is a rule (no citations plus a not-found phrase), not a judge call.
 
 ## Design notes
 

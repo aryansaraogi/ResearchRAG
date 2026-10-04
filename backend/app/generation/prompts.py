@@ -19,17 +19,24 @@ Rules:
 """
 
 
-CONDENSE_SYSTEM = "You turn follow-up questions about research papers into standalone search queries."
+PLAN_SYSTEM = "You turn questions about research papers into search queries for a passage retriever."
+MAX_SUBQUERIES = 3
 
 
-def condense_prompt(question: str, history: list[dict]) -> str:
-    # Long answers add little for resolving "it"/"they"; keep the tail of the conversation, trimmed
-    turns = [f"{m['role'].upper()}: {m['content'][:600]}" for m in history[-4:]]
+def plan_prompt(question: str, history: list[dict] | None) -> str:
+    convo = ""
+    if history:
+        # Long answers add little for resolving "it"/"they"; keep the tail of the conversation, trimmed
+        turns = [f"{m['role'].upper()}: {m['content'][:600]}" for m in history[-4:]]
+        convo = "Conversation so far:\n" + "\n".join(turns) + "\n\n"
     return (
-        "Conversation so far:\n" + "\n".join(turns) + f"\n\nFollow-up question: {question}\n\n"
-        "Rewrite the follow-up as ONE self-contained question that can be searched without the conversation: "
-        'replace words like "it", "they", "that model" or "the second one" with what they refer to, and keep '
-        "technical terms exact. If it is already self-contained, return it unchanged. Reply with the question only."
+        f"{convo}Question: {question}\n\n"
+        "Write the search queries needed to answer the question. Each query must be self-contained: replace "
+        'words like "it", "they" or "that model" with what they refer to, and keep technical terms exact.\n'
+        "- If the question asks about ONE thing, return exactly one query (the question itself if it is already "
+        "self-contained).\n"
+        "- If it asks about SEVERAL distinct things that would be found in different places (two papers, two "
+        f"methods, two settings), return one focused query per thing, at most {MAX_SUBQUERIES}."
     )
 
 

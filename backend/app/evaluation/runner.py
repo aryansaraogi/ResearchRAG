@@ -34,14 +34,16 @@ CONFIGS: dict[str, tuple[RetrievalMode, bool]] = {
 }
 RETRIEVAL_DEPTH = 10
 
-# The answer prompt asks for NOT_FOUND verbatim; a short answer that only says the sources lack it counts too
+# The answer prompt asks for NOT_FOUND verbatim; an answer that only says the sources lack it counts too
 REFUSAL_MARKERS = ("couldn't find", "could not find", "not in the indexed", "do not contain", "does not contain",
                    "don't contain", "doesn't contain", "no information", "not mentioned", "not covered")
 
 
 def is_refusal(answer: str) -> bool:
+    """A refusal answers nothing, so it cites nothing. A partial answer ("BERT masks 15% [1]; the sources
+    don't cover BART") carries citations and is not a refusal."""
     a = answer.strip().lower()
-    return NOT_FOUND.lower() in a or (len(a) < 300 and any(m in a for m in REFUSAL_MARKERS))
+    return not cit.cited_numbers(a) and (NOT_FOUND.lower() in a or any(m in a for m in REFUSAL_MARKERS))
 
 
 def adjacent_gold(items: list[EvalItem]) -> dict[str, set[str]]:

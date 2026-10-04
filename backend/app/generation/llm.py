@@ -172,9 +172,8 @@ class LLMClient:
         """quick=True gives up after ~30 s of backoff instead of minutes; info["model"] reports who answered."""
         return (self._generate_quick if quick else self._generate)(prompt, system, temperature, info)
 
-    @_retry
-    def generate_json(self, prompt: str, system: str | None = None, schema: Any = None,
-                      temperature: float = 0.0, info: dict | None = None) -> Any:
+    def _generate_json_once(self, prompt: str, system: str | None, schema: Any, temperature: float,
+                            info: dict | None) -> Any:
         extra: dict[str, Any] = {"response_mime_type": "application/json"}
         if schema is not None:
             extra["response_schema"] = schema
@@ -183,6 +182,13 @@ class LLMClient:
         if info is not None:
             info["model"] = model
         return json.loads(resp.text or "null")
+
+    _generate_json = _retry(_generate_json_once)
+    _generate_json_quick = _quick_retry(_generate_json_once)
+
+    def generate_json(self, prompt: str, system: str | None = None, schema: Any = None,
+                      temperature: float = 0.0, info: dict | None = None, *, quick: bool = False) -> Any:
+        return (self._generate_json_quick if quick else self._generate_json)(prompt, system, schema, temperature, info)
 
     @_quick_retry
     def _open_stream(self, prompt: str, system: str | None, temperature: float):

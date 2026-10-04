@@ -3,7 +3,7 @@
 Examples:
   uv run python scripts/eval_cli.py generate --n 40
   uv run python scripts/eval_cli.py run                       # retrieval metrics, all configs
-  uv run python scripts/eval_cli.py run --gen hybrid_rrf_rerank --max-gen 20
+  uv run python scripts/eval_cli.py run --gen hybrid_rrf hybrid_rrf_rerank --max-gen 28 --save
 """
 
 import argparse
@@ -13,10 +13,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.db import init_db  # noqa: E402
+from sqlmodel import Session  # noqa: E402
+
+from app.db import engine, init_db  # noqa: E402
 from app.evaluation import dataset as ds  # noqa: E402
 from app.evaluation.runner import CONFIGS, evaluate  # noqa: E402
 from app.generation.llm import get_llm  # noqa: E402
+from app.models import EvalRun  # noqa: E402
 
 TABLE_METRICS = ["hit@1", "recall@5", "recall@10", "mrr", "ndcg@10", "mrr_adj", "latency_ms",
                  "faithfulness", "answer_relevance", "correctness", "citation_precision",
@@ -44,6 +47,7 @@ def main() -> None:
                    help="configs to also evaluate generation/citations for (uses Gemini)")
     r.add_argument("--max-gen", type=int, default=20)
     r.add_argument("--out", type=Path, default=None, help="write full results JSON here")
+    r.add_argument("--save", action="store_true", help="also store the run so it appears on the Evaluation page")
     args = parser.parse_args()
     init_db()
 
@@ -52,9 +56,16 @@ def main() -> None:
         print(f"Saved {len(items)} questions to {ds.dataset_path()}")
         return
 
-    results, details = evaluate(args.configs, args.gen, args.max_gen, progress=lambda m: print(m, end="\r"))
-    print()
+    results, details = evaluate(args.configs, args.gen, args.max_gen, progress=lambda m: print(m, flush=True))
     print_table(results)
+    if args.save:
+        with Session(engine) as s:
+            run = EvalRun(configs=args.configs or list(CONFIGS), dataset_size=len(ds.load_dataset()), status="done",
+                          progress=f"Evaluated {len(details)}/{len(details)} questions (CLI)", results=results,
+                          details=details)
+            s.add(run)
+            s.commit()
+            print(f"Saved as run #{run.id}")
     if args.out:
         args.out.write_text(json.dumps({"results": results, "details": details}, indent=2), encoding="utf-8")
         print(f"Wrote {args.out}")

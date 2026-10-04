@@ -26,11 +26,13 @@ class ChatRequest(BaseModel):
     mode: RetrievalMode = RetrievalMode.hybrid
     rerank: bool = False  # cross-encoder adds ~4 s on CPU; see the README evaluation
     top_k: int = Field(default=8, ge=1, le=20)
+    # Split multi-part questions into sub-queries searched separately (one extra Gemini call when it applies)
+    multi_query: bool = True
 
 
 def _args(req: ChatRequest) -> dict:
     return dict(question=req.question, filters=req.filters, history=[m.model_dump() for m in req.history],
-                mode=req.mode, rerank=req.rerank, top_k=req.top_k)
+                mode=req.mode, rerank=req.rerank, top_k=req.top_k, multi_query=req.multi_query)
 
 
 @router.post("", response_model=rag.RAGAnswer)

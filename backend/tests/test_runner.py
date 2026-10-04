@@ -10,8 +10,8 @@ def test_refusal_detection():
     assert runner.is_refusal(NOT_FOUND)
     assert runner.is_refusal("The sources do not contain any results on HotpotQA.")
     assert not runner.is_refusal("BERT masks 15% of tokens [1].")
-    # A long answer that mentions a gap is a partial answer, not a refusal
-    assert not runner.is_refusal("BERT masks 15% of tokens [1]. " * 12 + "The ratio for RoBERTa is not mentioned.")
+    # Answering the covered half with a citation and flagging the gap is a partial answer, not a refusal
+    assert not runner.is_refusal("- BERT masks 15% of tokens [4].\n- The sources do not contain information about BART.")
 
 
 def test_adjacent_gold_adds_same_section_neighbours_only(monkeypatch):

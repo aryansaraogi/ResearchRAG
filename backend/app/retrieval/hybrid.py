@@ -94,3 +94,30 @@ def search(
             c.rerank_score = float(sc)
         chunks.sort(key=lambda c: c.rerank_score, reverse=True)
     return chunks[:top_k]
+
+
+def rrf_merge(lists: list[list[RetrievedChunk]], limit: int, k: int = 60) -> list[RetrievedChunk]:
+    """Reciprocal rank fusion across result lists: each list's top hits interleave, and a passage
+    found by several lists rises."""
+    scores: dict[str, float] = {}
+    first: dict[str, RetrievedChunk] = {}
+    for results in lists:
+        for rank, chunk in enumerate(results, start=1):
+            scores[chunk.id] = scores.get(chunk.id, 0.0) + 1.0 / (k + rank)
+            first.setdefault(chunk.id, chunk)
+    return [first[i] for i in sorted(scores, key=lambda i: scores[i], reverse=True)[:limit]]
+
+
+def search_many(
+    queries: list[str],
+    filters: SearchFilters | None = None,
+    mode: RetrievalMode = RetrievalMode.hybrid,
+    rerank: bool = False,
+    top_k: int | None = None,
+) -> list[RetrievedChunk]:
+    """Search each sub-query separately and fuse, so every part of a multi-part question gets passages.
+    One query embedding tends to settle on one half of "how do A and B differ?"."""
+    if len(queries) == 1:
+        return search(queries[0], filters=filters, mode=mode, rerank=rerank, top_k=top_k)
+    limit = top_k or get_settings().final_k
+    return rrf_merge([search(q, filters=filters, mode=mode, rerank=rerank, top_k=limit) for q in queries], limit)

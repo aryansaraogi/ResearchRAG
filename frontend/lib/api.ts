@@ -99,26 +99,36 @@ export interface EvalItem {
   paper_id: string;
   section: string;
   source: string;
+  /** false = the library can't answer it; the right response is a refusal */
+  answerable?: boolean;
 }
 
 export interface GenerationDetail {
   answer: string;
-  faithfulness: number;
-  answer_relevance: number;
-  context_relevance: number;
-  correctness: number;
-  citation_precision: number;
-  citation_coverage: number;
-  gold_cited: number | null;
+  model?: string | null;
+  judge_model?: string | null;
+  // Judged scores (answerable questions only)
+  faithfulness?: number;
+  answer_relevance?: number;
+  context_relevance?: number;
+  correctness?: number;
+  citation_precision?: number;
+  citation_coverage?: number;
+  gold_cited?: number | null;
+  false_refusal_rate?: number;
+  // Unanswerable questions: 1 if the answer was a refusal
+  refusal_accuracy?: number;
 }
 
 export interface EvalDetailRow {
   id: string;
   question: string;
   paper_id: string;
+  answerable?: boolean;
   configs: Record<
     string,
-    { gold_rank: number | null; mrr: number; generation?: GenerationDetail; generation_error?: string }
+    // gold_rank is absent for unanswerable questions (no gold passage), null when the gold passage was missed
+    { gold_rank?: number | null; mrr?: number; generation?: GenerationDetail; generation_error?: string }
   >;
 }
 
