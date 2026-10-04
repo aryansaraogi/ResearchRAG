@@ -40,7 +40,9 @@ interface Turn {
   citations?: Citation[];
   streaming?: boolean;
   error?: string;
-  /** Standalone question retrieval used, when this was a rewritten follow-up */
+  /** What retrieval searched for, when not the question as asked (rewritten follow-up, or one query per part) */
+  queries?: string[];
+  /** Single rewritten query saved by earlier versions */
   query?: string;
   /** Gemini model that wrote the answer */
   model?: string;
@@ -222,6 +224,7 @@ function AssistantTurn({
   const sourcesOpen = showSources || (selected && activeSource != null);
   const waiting = turn.streaming && !turn.content;
   const done = !turn.streaming;
+  const searched = turn.queries ?? (turn.query ? [turn.query] : undefined);
 
   return (
     <div className="group animate-in space-y-2">
@@ -234,9 +237,18 @@ function AssistantTurn({
           <span title={`${primaryModel} was unavailable, so a fallback model answered`}>· answered by {turn.model}</span>
         )}
       </div>
-      {turn.query && (
-        <p className="text-xs text-ink-3" title="Follow-ups are rewritten into a standalone question before searching">
-          Searched for: <span className="italic text-ink-2">{turn.query}</span>
+      {!!searched?.length && (
+        <p
+          className="text-xs text-ink-3"
+          title="Follow-ups are made self-contained, and questions about several things are searched one part at a time"
+        >
+          {searched.length > 1 ? "Searched separately for: " : "Searched for: "}
+          {searched.map((q, i) => (
+            <span key={i}>
+              {i > 0 && <span className="text-ink-3"> · </span>}
+              <span className="italic text-ink-2">{q}</span>
+            </span>
+          ))}
         </p>
       )}
       {waiting && turn.sources !== undefined && <p className="caret text-sm text-ink-3">Reading sources</p>}
@@ -374,7 +386,7 @@ export default function ChatPage() {
       await streamChat(
         { question, history, filters, mode, rerank },
         {
-          onQuery: (query) => patch(bot.id, { query }),
+          onQueries: (queries) => patch(bot.id, { queries }),
           onSources: (sources) => patch(bot.id, { sources }),
           onToken: (tok) => patch(bot.id, (t) => ({ content: t.content + tok })),
           onDone: (a) =>
@@ -382,7 +394,7 @@ export default function ChatPage() {
               content: a.answer,
               citations: a.citations,
               sources: a.sources,
-              query: a.query ?? undefined,
+              queries: a.queries ?? undefined,
               model: a.model ?? undefined,
             }),
           onError: (message) => patch(bot.id, { error: message }),

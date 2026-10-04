@@ -32,7 +32,7 @@ class RunRequest(BaseModel):
 
 @router.get("/configs")
 def configs():
-    return {name: {"mode": mode.value, "rerank": rerank} for name, (mode, rerank) in CONFIGS.items()}
+    return {name: {"mode": c.mode.value, "rerank": c.rerank, "multi_query": c.multi_query} for name, c in CONFIGS.items()}
 
 
 @router.get("/dataset", response_model=list[ds.EvalItem])

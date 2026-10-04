@@ -7,7 +7,10 @@ ResearchRAG is a full-stack retrieval-augmented generation (RAG) platform for re
   - dense BGE embeddings and sparse BM25, fused with reciprocal rank fusion (RRF) in Qdrant;
   - then an optional cross-encoder reranker (off by default, since it costs ~4 s per query and only helped keyword-style questions in the evaluation);
   - with metadata filters on year, author, arXiv category, paper and section type.
-- **Conversational follow-ups:** a follow-up such as "what are its limitations?" is rewritten into a standalone question before retrieval, and the UI shows what was searched.
+- **Query planning:**
+  - a follow-up such as "what are its limitations?" is rewritten into a standalone question before retrieval;
+  - a question about several things ("how do the Adam settings for BERT and the Transformer differ?") is split into one sub-query per part, each searched separately, with the results fused;
+  - the UI shows what was searched.
 - **Citation-aware generation:** Gemini answers only from numbered sources and cites every claim. Citation markers are checked against the retrieved sources and mapped back to the paper, section and page. The UI opens the PDF at the cited page.
 - **Automated evaluation:**
   - synthetic question sets with gold passages, plus hand-written multi-paper and unanswerable questions;
@@ -26,7 +29,7 @@ flowchart LR
   end
   D --> Q[(Qdrant<br/>named dense + sparse vectors<br/>payload: year, authors, section…)]
   subgraph Query
-    U[Question + filters] --> W[Follow-up rewrite<br/>standalone query]
+    U[Question + filters] --> W[Query planning<br/>follow-up rewrite,<br/>sub-queries per part]
     W --> P1[Dense prefetch top-50]
     W --> P2[BM25 prefetch top-50]
     P1 --> F[RRF fusion]
@@ -98,6 +101,7 @@ The evaluation answers two questions:
    | `sparse_bm25` | BM25 only |
    | `hybrid_rrf` | Dense + BM25, RRF |
    | `hybrid_rrf_rerank` | Hybrid, then cross-encoder |
+   | `hybrid_rrf_multi` | Hybrid, with multi-part questions split into sub-queries (one Gemini call), each searched and then fused with RRF |
 
    Reported per config: Hit@{1,3,5,10}, Recall@{5,10}, MRR, nDCG@10, P@5 and mean latency. Unanswerable questions have no gold passage and are left out.
 
@@ -193,7 +197,11 @@ The hand-written questions (single-passage, multi-paper and unanswerable) are in
 - **Chunking.** Chunks are packed at sentence level (~400 tokens), never cross a section boundary, carry page ranges for citations, and overlap by 15%. Each chunk is embedded with its paper title and section heading as a prefix.
 - **Hybrid search.** Both prefetches apply the same payload filter, so filtering happens before fusion rather than after. RRF avoids calibrating dense and sparse scores against each other.
 - **Reranking cost.** Cross-encoder cost grows linearly with candidates (~0.15 s each on a 4-core CPU), so only the top `RERANK_CANDIDATES` fused results (default 20) are reranked. It is off by default in Search and Ask: plain hybrid answers in under 0.1 s and scored best on the hand-written questions.
-- **Follow-ups.** Retrieval sees a single string, so with conversation history Gemini first rewrites the question into a standalone one (one short extra call). If the rewrite fails, the question is searched as asked.
+- **Query planning.** Retrieval embeds a single string, so two cases need help first:
+  - a follow-up that only makes sense with the conversation;
+  - a question about several things, where one embedding settles on one part.
+
+  When there is history, or when the question contains words like "and", "compare" or "differ", one structured Gemini call returns 1–3 self-contained queries. A simple first question skips the call. Each query is searched, and the result lists are fused with reciprocal rank fusion, so each part gets passages. If planning fails, the question is searched as asked.
 - **Model fallback.** `GEMINI_FALLBACK_MODELS` lists models to try when the main one returns 503 (overloaded), 429 or 404. A failing model is skipped for a cooldown (1 minute, or 1 hour for a used-up daily quota), and the UI notes when a fallback wrote the answer.
 - **Citations.** The model sees sources as `[n] Title — §Section, p. X`. After generation, out-of-range markers are stripped and the rest are resolved to chunk, paper, section and page.
 - **Free-tier friendly.** A client-side limiter spaces Gemini calls to `GEMINI_RPM`, and 429 and 5xx responses are retried with exponential backoff.

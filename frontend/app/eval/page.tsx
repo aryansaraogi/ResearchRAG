@@ -14,6 +14,11 @@ const CONFIGS: Record<string, { label: string; hint: string; color: string }> = 
   sparse_bm25: { label: "BM25", hint: "Sparse keyword retrieval", color: "var(--series-2)" },
   hybrid_rrf: { label: "Hybrid (RRF)", hint: "Dense + BM25, reciprocal rank fusion", color: "var(--series-3)" },
   hybrid_rrf_rerank: { label: "Hybrid + rerank", hint: "RRF, then cross-encoder rerank", color: "var(--series-4)" },
+  hybrid_rrf_multi: {
+    label: "Hybrid + sub-queries",
+    hint: "Gemini splits multi-part questions; each part is searched and the lists fused",
+    color: "var(--series-5)",
+  },
 };
 const CONFIG_ORDER = Object.keys(CONFIGS);
 const cfgLabel = (c: string) => CONFIGS[c]?.label ?? c;
@@ -298,7 +303,7 @@ function NewRunCard({
         {!datasetSize
           ? "Generate a question set first."
           : gen.length
-            ? `≈ ${calls} Gemini calls. Multi-paper and unanswerable questions are always judged.`
+            ? `≈ ${calls}${chosen.includes("hybrid_rrf_multi") ? "+" : ""} Gemini calls. Multi-paper and unanswerable questions are always judged.`
             : llmReady
               ? "Retrieval only: no Gemini calls."
               : "No Gemini key: retrieval metrics only."}
@@ -543,6 +548,11 @@ function QuestionRow({
                         <span className="h-2.5 w-2.5 rounded-sm" style={{ background: cfgColor(c) }} />
                         {cfgLabel(c)}
                       </div>
+                      {!!e.queries?.length && (
+                        <p className="mb-1 text-xs text-ink-3">
+                          Searched separately for: <span className="italic text-ink-2">{e.queries.join(" · ")}</span>
+                        </p>
+                      )}
                       {e.generation_error && <ErrorNote message={e.generation_error} />}
                       {e.generation && (
                         <>

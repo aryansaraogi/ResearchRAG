@@ -33,10 +33,13 @@ def plan_prompt(question: str, history: list[dict] | None) -> str:
         f"{convo}Question: {question}\n\n"
         "Write the search queries needed to answer the question. Each query must be self-contained: replace "
         'words like "it", "they" or "that model" with what they refer to, and keep technical terms exact.\n'
-        "- If the question asks about ONE thing, return exactly one query (the question itself if it is already "
-        "self-contained).\n"
-        "- If it asks about SEVERAL distinct things that would be found in different places (two papers, two "
-        f"methods, two settings), return one focused query per thing, at most {MAX_SUBQUERIES}."
+        "- Default to exactly ONE query (the question itself if it is already self-contained). Several facts about "
+        "the same model, method or experiment stay one query, because one passage usually holds them all.\n"
+        "- Split ONLY when the parts concern different papers, models or methods that would be described in "
+        f"different places: then return one focused query per part, at most {MAX_SUBQUERIES}.\n"
+        'Example, one query: "What GPUs was the Transformer trained on, and how long did training take?"\n'
+        'Example, split: "How do the Adam settings for BERT and for the Transformer differ?" -> '
+        '"Adam optimizer settings for BERT pre-training", "Adam optimizer settings for training the Transformer"'
     )
 
 

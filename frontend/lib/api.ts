@@ -68,8 +68,8 @@ export interface RAGAnswer {
   answer: string;
   citations: Citation[];
   sources: RetrievedChunk[];
-  /** What retrieval searched for, when a follow-up was rewritten into a standalone question */
-  query?: string | null;
+  /** What retrieval searched for, when not the question as asked: a rewritten follow-up, or one query per part */
+  queries?: string[] | null;
   /** The Gemini model that wrote the answer (may be a fallback) */
   model?: string | null;
 }
@@ -128,7 +128,14 @@ export interface EvalDetailRow {
   configs: Record<
     string,
     // gold_rank is absent for unanswerable questions (no gold passage), null when the gold passage was missed
-    { gold_rank?: number | null; mrr?: number; generation?: GenerationDetail; generation_error?: string }
+    {
+      gold_rank?: number | null;
+      mrr?: number;
+      /** Sub-queries searched, for multi-query configs that split the question */
+      queries?: string[];
+      generation?: GenerationDetail;
+      generation_error?: string;
+    }
   >;
 }
 
@@ -230,7 +237,7 @@ export interface ChatRequest {
 }
 
 export interface StreamHandlers {
-  onQuery?: (query: string) => void;
+  onQueries?: (queries: string[]) => void;
   onSources: (sources: RetrievedChunk[]) => void;
   onToken: (token: string) => void;
   onDone: (answer: RAGAnswer) => void;
@@ -273,7 +280,7 @@ export async function streamChat(req: ChatRequest, h: StreamHandlers, signal?: A
       }
       if (!data.length) continue; // keep-alive comments
       const payload = JSON.parse(data.join("\n"));
-      if (event === "query") h.onQuery?.(payload);
+      if (event === "queries") h.onQueries?.(payload);
       else if (event === "sources") h.onSources(payload);
       else if (event === "token") h.onToken(payload);
       else if (event === "done") h.onDone(payload);

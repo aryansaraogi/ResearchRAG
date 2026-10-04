@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
+from typing import NamedTuple
 
 from sqlmodel import Session
 
@@ -18,19 +19,26 @@ from app.evaluation.retrieval_metrics import hit_at_k, mean_scores, reciprocal_r
 from app.generation import citations as cit
 from app.generation.llm import get_judge_llm, get_llm
 from app.generation.prompts import ANSWER_SYSTEM, NOT_FOUND, answer_prompt
+from app.generation.rag import plan_queries
 from app.ingestion.chunker import chunk_id
 from app.models import EvalRun
 from app.retrieval import vector_store
-from app.retrieval.hybrid import RetrievalMode, search
+from app.retrieval.hybrid import RetrievalMode, search_many
 
 log = logging.getLogger(__name__)
 
-# name -> (retrieval mode, rerank)
-CONFIGS: dict[str, tuple[RetrievalMode, bool]] = {
-    "dense": (RetrievalMode.dense, False),
-    "sparse_bm25": (RetrievalMode.sparse, False),
-    "hybrid_rrf": (RetrievalMode.hybrid, False),
-    "hybrid_rrf_rerank": (RetrievalMode.hybrid, True),
+class RetrievalConfig(NamedTuple):
+    mode: RetrievalMode
+    rerank: bool = False
+    multi_query: bool = False  # Gemini splits multi-part questions; each part is searched and the lists fused
+
+
+CONFIGS: dict[str, RetrievalConfig] = {
+    "dense": RetrievalConfig(RetrievalMode.dense),
+    "sparse_bm25": RetrievalConfig(RetrievalMode.sparse),
+    "hybrid_rrf": RetrievalConfig(RetrievalMode.hybrid),
+    "hybrid_rrf_rerank": RetrievalConfig(RetrievalMode.hybrid, rerank=True),
+    "hybrid_rrf_multi": RetrievalConfig(RetrievalMode.hybrid, multi_query=True),
 }
 RETRIEVAL_DEPTH = 10
 
@@ -117,11 +125,12 @@ def evaluate(
             judged = name in per_config_gen and item.id in gen_ids
             if not item.answerable and not judged:
                 continue  # no gold passage to rank, nothing to answer
-            mode, rerank = CONFIGS[name]
-            t0 = time.perf_counter()
-            results = search(item.question, mode=mode, rerank=rerank, top_k=RETRIEVAL_DEPTH)
+            cfg = CONFIGS[name]
+            t0 = time.perf_counter()  # includes the Gemini planning call for multi-query configs
+            queries = plan_queries(item.question, None) if cfg.multi_query else [item.question]
+            results = search_many(queries, mode=cfg.mode, rerank=cfg.rerank, top_k=RETRIEVAL_DEPTH)
             latency[name].append((time.perf_counter() - t0) * 1000)
-            entry: dict = {}
+            entry: dict = {"queries": queries} if len(queries) > 1 else {}
             if item.answerable:
                 ranked = [r.id for r in results]
                 rs = retrieval_scores(ranked, gold)
@@ -129,7 +138,7 @@ def evaluate(
                 rs.update({"hit@1_adj": hit_at_k(ranked, adj, 1), "hit@5_adj": hit_at_k(ranked, adj, 5),
                            "mrr_adj": reciprocal_rank(ranked, adj)})
                 per_config_ret[name].append(rs)
-                entry = {"gold_rank": next((i for i, r in enumerate(ranked, 1) if r in gold), None), "mrr": rs["mrr"]}
+                entry.update(gold_rank=next((i for i, r in enumerate(ranked, 1) if r in gold), None), mrr=rs["mrr"])
 
             if judged:
                 try:
